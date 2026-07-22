@@ -3,10 +3,14 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
+ENV_FILE = BACKEND_ROOT / ".env"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=ENV_FILE,
+        env_file_encoding="utf-8",
+    )
 
     app_name: str = "Project AI Clipper API"
     cors_origins: list[str] = ["http://localhost:3000"]
@@ -33,6 +37,10 @@ class Settings(BaseSettings):
     analysis_api_key: str = ""
     analysis_api_base_url: str | None = None
     analysis_batch_size: int = 10
+    analysis_timeout_seconds: int = 120
+    analysis_max_transcript_chars: int = 12000
+    analysis_context_segments: int = 2
+    analysis_max_retries: int = 2
     clip_candidates_dir: Path = BACKEND_ROOT / "clip_candidates"
     clip_candidates_output_filename: str = "clip_candidates.json"
     clip_selection_min_duration_seconds: float = 15.0

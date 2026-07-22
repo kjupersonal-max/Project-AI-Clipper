@@ -11,6 +11,14 @@ from app.models.project import ProcessingStatus
 from app.services.project_store import create_project_metadata, load_project
 
 
+@pytest.fixture(autouse=True)
+def isolate_analysis_settings(monkeypatch):
+    """Keep tests offline and deterministic regardless of backend/.env."""
+    monkeypatch.setattr(settings, "analysis_provider", "heuristic")
+    monkeypatch.setattr(settings, "analysis_api_key", "")
+    monkeypatch.setattr(settings, "analysis_external_provider", "openai")
+
+
 @pytest.fixture()
 def temp_backend_dirs(tmp_path, monkeypatch):
     upload_dir = tmp_path / "uploads"

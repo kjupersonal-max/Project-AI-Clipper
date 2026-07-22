@@ -366,7 +366,9 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
           : "Timeline analysis failed.";
       setActionError(message);
       setAnalyzeState("error");
-      if (message.toLowerCase().includes("provider") || message.toLowerCase().includes("analysis_api_key")) {
+      if (
+        /provider|analysis_api_key|openai|unavailable/i.test(message)
+      ) {
         setAnalysisError(message);
       }
       await refreshProject();
@@ -822,7 +824,9 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
               loading={analysisLoading || analyzeState === "loading"}
               error={analysisError}
               unavailableProvider={
-                analyzeState === "error" && analysisError?.toLowerCase().includes("provider")
+                analyzeState === "error" &&
+                analysisError &&
+                /provider|analysis_api_key|openai|unavailable/i.test(analysisError)
                   ? analysisError
                   : null
               }

@@ -53,18 +53,27 @@ def _sanitize_error_message(message: str, max_length: int = 240) -> str:
     return cleaned[: max_length - 3] + "..."
 
 
-def cleanup_analysis_output(project_id: str) -> None:
+def cleanup_partial_analysis_output(project_id: str) -> None:
     analysis_dir = settings.analysis_dir / project_id
     partial_path = analysis_dir / f"{settings.analysis_output_filename}.part"
     if partial_path.exists():
         partial_path.unlink(missing_ok=True)
 
-    output_path = analysis_dir / settings.analysis_output_filename
+
+def cleanup_analysis_output(project_id: str) -> None:
+    cleanup_partial_analysis_output(project_id)
+
+    output_path = get_analysis_output_path(project_id)
     if output_path.exists():
         output_path.unlink(missing_ok=True)
 
+    analysis_dir = settings.analysis_dir / project_id
     if analysis_dir.exists() and not any(analysis_dir.iterdir()):
         shutil.rmtree(analysis_dir, ignore_errors=True)
+
+
+def has_existing_analysis_output(project_id: str) -> bool:
+    return get_analysis_output_path(project_id).exists()
 
 
 def _validate_segment_alignment(
@@ -137,14 +146,28 @@ def _require_completed_transcript(project_id: str):
 def analyze_project_timeline(project_id: str) -> AnalysisDocument:
     transcript = _require_completed_transcript(project_id)
 
+    preserve_existing = has_existing_analysis_output(project_id)
+
     try:
         provider = resolve_analysis_provider()
     except ProviderConfigurationError:
-        cleanup_analysis_output(project_id)
+        if not preserve_existing:
+            cleanup_analysis_output(project_id)
+        else:
+            cleanup_partial_analysis_output(project_id)
         raise
+
+    if hasattr(provider, "bind_transcript"):
+        provider.bind_transcript(transcript.segments)
 
     analyzed_segments: list[SegmentAnalysis] = []
     batch_size = max(1, settings.analysis_batch_size)
+
+    def _cleanup_failure_output() -> None:
+        if preserve_existing:
+            cleanup_partial_analysis_output(project_id)
+        else:
+            cleanup_analysis_output(project_id)
 
     try:
         for batch in batched(transcript.segments, batch_size):
@@ -154,16 +177,16 @@ def analyze_project_timeline(project_id: str) -> AnalysisDocument:
             _validate_segment_alignment(batch_segments, validated_batch)
             analyzed_segments.extend(validated_batch)
     except AnalysisProviderError:
-        cleanup_analysis_output(project_id)
+        _cleanup_failure_output()
         raise
     except Exception as exc:
-        cleanup_analysis_output(project_id)
+        _cleanup_failure_output()
         raise AnalysisProcessError(
             _sanitize_error_message(f"Timeline analysis failed: {exc}")
         ) from exc
 
     if not analyzed_segments:
-        cleanup_analysis_output(project_id)
+        _cleanup_failure_output()
         raise AnalysisProcessError("Timeline analysis produced no segment results.")
 
     is_heuristic = provider.provider_name == "heuristic"
@@ -181,7 +204,10 @@ def analyze_project_timeline(project_id: str) -> AnalysisDocument:
     try:
         _write_analysis_atomically(project_id, document)
     except Exception as exc:
-        cleanup_analysis_output(project_id)
+        if preserve_existing:
+            cleanup_partial_analysis_output(project_id)
+        else:
+            cleanup_analysis_output(project_id)
         raise AnalysisProcessError(
             _sanitize_error_message(f"Failed to save analysis: {exc}")
         ) from exc

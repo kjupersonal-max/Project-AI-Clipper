@@ -26,6 +26,7 @@ from app.services.project_store import (
     validate_project_id,
 )
 from app.services.analysis.base import ProviderConfigurationError, AnalysisProviderError
+from app.services.analysis.diagnostics import get_analysis_provider_diagnostics
 from app.services.clip_selection import (
     ClipCandidatesNotFoundError,
     ClipSelectionAnalysisRequiredError,
@@ -43,6 +44,8 @@ from app.services.timeline_analysis import (
     InvalidTranscriptError,
     analyze_project_timeline,
     cleanup_analysis_output,
+    cleanup_partial_analysis_output,
+    has_existing_analysis_output,
     load_project_analysis,
 )
 from app.services.transcription import (
@@ -269,6 +272,11 @@ def transcribe_project(project_id: str) -> TranscribeResponse:
         raise HTTPException(status_code=422, detail=exc.message) from exc
 
 
+@router.get("/analysis/provider-diagnostics")
+def analysis_provider_diagnostics(dry_run: bool = False) -> dict[str, object]:
+    return get_analysis_provider_diagnostics(dry_run=dry_run)
+
+
 @router.get("/{project_id}/analysis", response_model=AnalysisDocument)
 def get_project_analysis(project_id: str) -> AnalysisDocument:
     validate_project_id(project_id)
@@ -285,14 +293,41 @@ def analyze_project(project_id: str) -> AnalyzeResponse:
     validate_project_id(project_id)
     project = load_project(project_id)
 
+    previous_analysis_path = project.analysis_path
+    previous_analysis_provider = project.analysis_provider
+    previous_analysis_completed_at = project.analysis_completed_at
+    had_existing_analysis = has_existing_analysis_output(project_id)
+
     project.analysis_status = ProcessingStatus.PROCESSING
     project.analysis_started_at = utc_now_iso()
-    project.analysis_completed_at = None
-    project.analysis_path = None
-    project.analysis_provider = None
     project.last_error = None
     project.append_log("Timeline analysis started.")
     save_project(project)
+
+    def restore_previous_analysis_state(*, detail: str, level: str = "error") -> None:
+        nonlocal project
+        project = load_project(project_id)
+        if had_existing_analysis and has_existing_analysis_output(project_id):
+            project.analysis_status = ProcessingStatus.COMPLETED
+            project.analysis_path = previous_analysis_path
+            project.analysis_provider = previous_analysis_provider
+            project.analysis_completed_at = previous_analysis_completed_at
+            project.last_error = detail
+            project.append_log(f"Timeline analysis failed; kept previous analysis: {detail}", level=level)
+        else:
+            project.analysis_status = ProcessingStatus.FAILED
+            project.analysis_path = None
+            project.analysis_provider = None
+            project.analysis_completed_at = utc_now_iso()
+            project.last_error = detail
+            project.append_log(f"Timeline analysis failed: {detail}", level=level)
+        save_project(project)
+
+    def cleanup_failed_analysis_output() -> None:
+        if had_existing_analysis:
+            cleanup_partial_analysis_output(project_id)
+        else:
+            cleanup_analysis_output(project_id)
 
     try:
         document = analyze_project_timeline(project_id)
@@ -317,58 +352,28 @@ def analyze_project(project_id: str) -> AnalyzeResponse:
             analysis_path=relative_path,
         )
     except HTTPException as exc:
-        cleanup_analysis_output(project_id)
-        project = load_project(project_id)
-        project.analysis_status = ProcessingStatus.FAILED
+        cleanup_failed_analysis_output()
         detail = exc.detail if isinstance(exc.detail, str) else "Timeline analysis failed."
-        project.last_error = detail
-        project.analysis_completed_at = utc_now_iso()
-        project.append_log(f"Timeline analysis failed: {detail}", level="error")
-        save_project(project)
+        restore_previous_analysis_state(detail=detail)
         raise
     except AnalysisTranscriptRequiredError as exc:
-        project = load_project(project_id)
-        project.analysis_status = ProcessingStatus.FAILED
-        project.last_error = exc.message
-        project.analysis_completed_at = utc_now_iso()
-        project.append_log(f"Timeline analysis failed: {exc.message}", level="error")
-        save_project(project)
+        restore_previous_analysis_state(detail=exc.message)
         raise HTTPException(status_code=404, detail=exc.message) from exc
     except InvalidTranscriptError as exc:
-        cleanup_analysis_output(project_id)
-        project = load_project(project_id)
-        project.analysis_status = ProcessingStatus.FAILED
-        project.last_error = exc.message
-        project.analysis_completed_at = utc_now_iso()
-        project.append_log(f"Timeline analysis failed: {exc.message}", level="error")
-        save_project(project)
+        cleanup_failed_analysis_output()
+        restore_previous_analysis_state(detail=exc.message)
         raise HTTPException(status_code=422, detail=exc.message) from exc
     except ProviderConfigurationError as exc:
-        cleanup_analysis_output(project_id)
-        project = load_project(project_id)
-        project.analysis_status = ProcessingStatus.FAILED
-        project.last_error = exc.message
-        project.analysis_completed_at = utc_now_iso()
-        project.append_log(f"Timeline analysis failed: {exc.message}", level="error")
-        save_project(project)
+        cleanup_failed_analysis_output()
+        restore_previous_analysis_state(detail=exc.message)
         raise HTTPException(status_code=503, detail=exc.message) from exc
     except AnalysisProviderError as exc:
-        cleanup_analysis_output(project_id)
-        project = load_project(project_id)
-        project.analysis_status = ProcessingStatus.FAILED
-        project.last_error = exc.message
-        project.analysis_completed_at = utc_now_iso()
-        project.append_log(f"Timeline analysis failed: {exc.message}", level="error")
-        save_project(project)
+        cleanup_failed_analysis_output()
+        restore_previous_analysis_state(detail=exc.message)
         raise HTTPException(status_code=503, detail=exc.message) from exc
     except AnalysisProcessError as exc:
-        cleanup_analysis_output(project_id)
-        project = load_project(project_id)
-        project.analysis_status = ProcessingStatus.FAILED
-        project.last_error = exc.message
-        project.analysis_completed_at = utc_now_iso()
-        project.append_log(f"Timeline analysis failed: {exc.message}", level="error")
-        save_project(project)
+        cleanup_failed_analysis_output()
+        restore_previous_analysis_state(detail=exc.message)
         raise HTTPException(status_code=422, detail=exc.message) from exc
 
 

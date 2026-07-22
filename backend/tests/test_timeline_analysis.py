@@ -219,3 +219,53 @@ def test_analyze_failure_cleans_partial_file(
     analysis_dir = temp_backend_dirs["analysis_dir"] / sample_project["project_id"]
     assert not (analysis_dir / "analysis.json").exists()
     assert not (analysis_dir / "analysis.json.part").exists()
+
+
+def test_failed_reanalysis_preserves_prior_analysis(
+    sample_project,
+    temp_backend_dirs,
+    sample_transcript_segments,
+    monkeypatch,
+):
+    _write_completed_transcript(sample_project, temp_backend_dirs, sample_transcript_segments)
+    client = TestClient(app)
+    initial = client.post(f"/api/projects/{sample_project['project_id']}/analyze")
+    assert initial.status_code == 200
+    assert initial.json()["provider"] == "heuristic"
+
+    analysis_path = (
+        temp_backend_dirs["analysis_dir"]
+        / sample_project["project_id"]
+        / "analysis.json"
+    )
+    original_bytes = analysis_path.read_bytes()
+
+    class FailingProvider:
+        provider_name = "openai"
+        model_name = "gpt-4o-mini"
+
+        def bind_transcript(self, segments):
+            return None
+
+        def analyze_batch(self, segments):
+            raise AnalysisProviderError("Provider unavailable for test.")
+
+    monkeypatch.setattr(
+        "app.services.timeline_analysis.resolve_analysis_provider",
+        lambda: FailingProvider(),
+    )
+
+    client = TestClient(app)
+    response = client.post(f"/api/projects/{sample_project['project_id']}/analyze")
+    assert response.status_code == 503
+
+    assert analysis_path.exists()
+    assert analysis_path.read_bytes() == original_bytes
+
+    preserved = load_project_analysis(sample_project["project_id"])
+    assert preserved.provider == "heuristic"
+    assert preserved.is_heuristic_fallback is True
+
+    project = load_project(sample_project["project_id"])
+    assert project.analysis_status == ProcessingStatus.COMPLETED
+    assert project.analysis_provider == "heuristic"
