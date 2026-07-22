@@ -7,6 +7,7 @@ import {
   fetchProject,
   fetchProjectAnalysis,
   fetchProjectClipCandidates,
+  fetchProjectClipExports,
   fetchProjectTranscript,
   getProjectVideoUrl,
   inspectProject,
@@ -52,8 +53,10 @@ import {
   buildExportClipRequestFromSegment,
   buildExportKeyFromCandidate,
   buildExportKeyFromSegment,
+  buildExportedStateFromClips,
   isCandidateExported,
   isCandidateExporting,
+  mergeExportedClips,
   type CandidateExportState,
 } from "@/lib/clip-export";
 import {
@@ -121,6 +124,8 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
     defaultClipCandidateFilters,
   );
   const [exportedClips, setExportedClips] = useState<ExportClipResponse[]>([]);
+  const [exportedClipsLoading, setExportedClipsLoading] = useState(false);
+  const [exportedClipsError, setExportedClipsError] = useState<string | null>(null);
   const [exportStates, setExportStates] = useState<Record<string, CandidateExportState>>({});
   const [exportedCandidateIds, setExportedCandidateIds] = useState<Set<string>>(
     () => new Set(),
@@ -217,9 +222,49 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
     }
   }, [projectId]);
 
+  const loadExportedClips = useCallback(async () => {
+    setExportedClipsLoading(true);
+    setExportedClipsError(null);
+
+    try {
+      const data = await fetchProjectClipExports(projectId);
+      const restored = buildExportedStateFromClips(data.exports);
+
+      setExportedClips((currentClips) => mergeExportedClips(data.exports, currentClips));
+      setExportedCandidateIds(
+        (currentIds) => new Set([...restored.exportedCandidateIds, ...currentIds]),
+      );
+      setExportStates((currentStates) => ({
+        ...restored.exportStates,
+        ...currentStates,
+      }));
+
+      return data.exports;
+    } catch (error) {
+      const status =
+        error && typeof error === "object" && "status" in error
+          ? (error as ApiError).status
+          : undefined;
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? String((error as ApiError).message)
+          : "Unable to load exported clips.";
+
+      setExportedClipsError(
+        status === 404
+          ? "Saved exports could not be loaded because GET /api/projects/{project_id}/clips/exports is unavailable on the backend. Restart the backend server to pick up the export list endpoint, then refresh."
+          : message,
+      );
+      return null;
+    } finally {
+      setExportedClipsLoading(false);
+    }
+  }, [projectId]);
+
   const applyProjectState = useCallback(
     async (data: Project) => {
       setProject(data);
+      await loadExportedClips();
       if (data.transcription_status === "completed") {
         await loadTranscript();
       } else {
@@ -241,7 +286,7 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
         setClipCandidatesError(null);
       }
     },
-    [loadAnalysis, loadClipCandidates, loadTranscript],
+    [loadAnalysis, loadClipCandidates, loadExportedClips, loadTranscript],
   );
 
   const seekVideoTo = useCallback((seconds: number) => {
@@ -270,7 +315,7 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
       try {
         const response = await exportProjectClip(projectId, request);
 
-        setExportedClips((current) => [response, ...current]);
+        setExportedClips((current) => mergeExportedClips([response], current));
         setExportedCandidateIds((current) => new Set(current).add(exportKey));
         setExportStates((current) => ({
           ...current,
@@ -970,11 +1015,15 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
       <Card>
         <CardHeader
           title="Exported Clips"
-          description="Rendered MP4 files exported from clip candidates in this session"
+          description="Saved MP4 files exported from clip candidates"
           action={<ExportedClipsSummary count={exportedClips.length} />}
         />
         <CardContent>
-          <ExportedClipsPanel exportedClips={exportedClips} />
+          <ExportedClipsPanel
+            exportedClips={exportedClips}
+            loading={exportedClipsLoading}
+            error={exportedClipsError}
+          />
         </CardContent>
       </Card>
 

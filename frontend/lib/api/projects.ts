@@ -218,6 +218,11 @@ export type ExportClipResponse = {
   export_status: ProcessingStatus;
 };
 
+export type ClipExportsListResponse = {
+  project_id: string;
+  exports: ExportClipResponse[];
+};
+
 export type ApiError = {
   message: string;
   status?: number;
@@ -394,4 +399,18 @@ export async function exportProjectClip(
   }
 
   return response.json() as Promise<ExportClipResponse>;
+}
+
+export async function fetchProjectClipExports(
+  projectId: string,
+): Promise<ClipExportsListResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/clips/exports`, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<ClipExportsListResponse>;
 }

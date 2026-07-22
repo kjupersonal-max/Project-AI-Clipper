@@ -4,11 +4,14 @@ import {
   buildExportClipRequest,
   buildExportClipRequestFromSegment,
   buildExportKeyFromSegment,
+  buildExportedStateFromClips,
   deriveClipName,
   deriveClipNameFromSegment,
   isCandidateExported,
   isCandidateExporting,
+  mergeExportedClips,
 } from "@/lib/clip-export";
+import type { ExportClipResponse } from "@/lib/api/projects";
 
 const sampleCandidate: ClipCandidate = {
   clip_id: "candidate-123",
@@ -127,5 +130,58 @@ describe("export state helpers", () => {
         "candidate-123": { status: "exporting" },
       }),
     ).toBe(true);
+  });
+});
+
+const savedClip: ExportClipResponse = {
+  clip_id: "clip-1",
+  project_id: "project-1",
+  filename: "saved.mp4",
+  relative_path: "project-1/clips/saved.mp4",
+  media_url: "/api/projects/project-1/media/clips/clip-1",
+  start_time: 1,
+  end_time: 2,
+  duration: 1,
+  file_size_bytes: 1000,
+  candidate_id: "candidate-123",
+  clip_name: "Saved clip",
+  created_at: "2026-07-22T10:00:00Z",
+  export_status: "completed",
+};
+
+const sessionClip: ExportClipResponse = {
+  ...savedClip,
+  clip_id: "clip-2",
+  filename: "session.mp4",
+  media_url: "/api/projects/project-1/media/clips/clip-2",
+  clip_name: "Session clip",
+  created_at: "2026-07-22T12:00:00Z",
+  candidate_id: null,
+};
+
+describe("mergeExportedClips", () => {
+  it("merges saved and session exports without duplicates", () => {
+    const merged = mergeExportedClips([savedClip], [savedClip, sessionClip]);
+
+    expect(merged).toHaveLength(2);
+    expect(merged.map((clip) => clip.clip_id)).toEqual(["clip-2", "clip-1"]);
+  });
+});
+
+describe("buildExportedStateFromClips", () => {
+  it("restores exported candidate state when candidate_id exists", () => {
+    const restored = buildExportedStateFromClips([savedClip]);
+
+    expect(restored.exportedCandidateIds).toEqual(new Set(["candidate-123"]));
+    expect(restored.exportStates).toEqual({
+      "candidate-123": { status: "completed" },
+    });
+  });
+
+  it("ignores exports without candidate_id", () => {
+    const restored = buildExportedStateFromClips([sessionClip]);
+
+    expect(restored.exportedCandidateIds.size).toBe(0);
+    expect(restored.exportStates).toEqual({});
   });
 });

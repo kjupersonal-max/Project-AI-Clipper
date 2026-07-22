@@ -16,6 +16,7 @@ from app.services.clip_export import (
     ClipExportProcessError,
     ClipExportValidationError,
     export_project_clip,
+    list_project_clip_exports,
     sanitize_clip_name,
 )
 from app.services.project_store import load_project, save_project
@@ -304,3 +305,138 @@ def test_export_clip_not_found(sample_project, temp_backend_dirs):
     )
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
+
+
+def _export_clip(
+    sample_project,
+    *,
+    start_time: float,
+    end_time: float,
+    clip_name: str,
+):
+    with patch(
+        "app.services.clip_export._run_command",
+        side_effect=_fake_ffmpeg_run_factory(),
+    ):
+        return export_project_clip(
+            sample_project["project_id"],
+            start_time=start_time,
+            end_time=end_time,
+            clip_name=clip_name,
+        )
+
+
+def test_list_clip_exports_empty(sample_project, temp_backend_dirs):
+    client = TestClient(app)
+    response = client.get(f"/api/projects/{sample_project['project_id']}/clips/exports")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["project_id"] == sample_project["project_id"]
+    assert body["exports"] == []
+
+
+def test_list_clip_exports_multiple_newest_first(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+
+    first = _export_clip(sample_project, start_time=0.0, end_time=1.0, clip_name="first")
+    second = _export_clip(sample_project, start_time=1.0, end_time=2.0, clip_name="second")
+
+    manifest_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / "exports.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for export, created_at in zip(manifest["exports"], ["2026-07-22T10:00:00Z", "2026-07-22T11:00:00Z"], strict=True):
+        export["created_at"] = created_at
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    client = TestClient(app)
+    response = client.get(f"/api/projects/{sample_project['project_id']}/clips/exports")
+
+    assert response.status_code == 200
+    exports = response.json()["exports"]
+    assert len(exports) == 2
+    assert exports[0]["clip_id"] == second.clip_id
+    assert exports[1]["clip_id"] == first.clip_id
+    assert exports[0]["media_url"].endswith(second.clip_id)
+    assert exports[0]["export_status"] == "completed"
+
+
+def test_list_clip_exports_missing_project(temp_backend_dirs):
+    client = TestClient(app)
+    missing_id = "11111111-1111-4111-8111-111111111111"
+    response = client.get(f"/api/projects/{missing_id}/clips/exports")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Project not found."
+
+
+def test_list_clip_exports_excludes_missing_file(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    exported = _export_clip(sample_project, start_time=0.0, end_time=1.0, clip_name="missing-file")
+
+    clip_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / exported.filename
+    )
+    clip_path.unlink()
+
+    exports = list_project_clip_exports(sample_project["project_id"])
+    assert exports == []
+
+
+def test_list_clip_exports_skips_malformed_record(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    exported = _export_clip(sample_project, start_time=0.0, end_time=1.0, clip_name="valid")
+
+    manifest_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / "exports.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["exports"].append({"clip_id": "bad-record", "filename": 123})
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    exports = list_project_clip_exports(sample_project["project_id"])
+    assert len(exports) == 1
+    assert exports[0].clip_id == exported.clip_id
+
+
+def test_list_clip_exports_handles_malformed_manifest(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    clips_dir = temp_backend_dirs["processed_dir"] / sample_project["project_id"] / "clips"
+    clips_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = clips_dir / "exports.json"
+    manifest_path.write_text("{not-json", encoding="utf-8")
+
+    exports = list_project_clip_exports(sample_project["project_id"])
+    assert exports == []
+
+
+def test_list_clip_exports_endpoint(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    exported = _export_clip(sample_project, start_time=0.0, end_time=1.0, clip_name="saved")
+
+    client = TestClient(app)
+    response = client.get(f"/api/projects/{sample_project['project_id']}/clips/exports")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["exports"]) == 1
+    assert body["exports"][0]["clip_id"] == exported.clip_id
+    assert body["exports"][0]["filename"] == exported.filename
+
+
+def test_list_clip_exports_route_is_registered():
+    client = TestClient(app)
+    openapi_paths = client.get("/openapi.json").json()["paths"]
+
+    assert "/api/projects/{project_id}/clips/exports" in openapi_paths
+    assert "get" in openapi_paths["/api/projects/{project_id}/clips/exports"]

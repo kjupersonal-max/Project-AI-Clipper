@@ -124,6 +124,88 @@ def _validate_candidate_id(project_id: str, candidate_id: str | None) -> None:
         raise ClipExportValidationError(f"Clip candidate '{candidate_id}' was not found.")
 
 
+def _record_to_export_response(
+    project_id: str,
+    record: ExportedClipRecord,
+) -> ExportClipResponse:
+    return ExportClipResponse(
+        clip_id=record.clip_id,
+        project_id=record.project_id,
+        filename=record.filename,
+        relative_path=record.relative_path,
+        media_url=f"/api/projects/{project_id}/media/clips/{record.clip_id}",
+        start_time=record.start_time,
+        end_time=record.end_time,
+        duration=record.duration,
+        file_size_bytes=record.file_size_bytes,
+        candidate_id=record.candidate_id,
+        clip_name=record.clip_name,
+        created_at=record.created_at,
+        export_status=record.export_status,
+    )
+
+
+def _parse_export_record(raw: object, project_id: str) -> ExportedClipRecord | None:
+    if not isinstance(raw, dict):
+        return None
+
+    try:
+        record = ExportedClipRecord.model_validate(raw)
+    except ValueError:
+        return None
+
+    if record.project_id != project_id:
+        return None
+
+    return record
+
+
+def _load_exports_manifest_records(project_id: str) -> list[ExportedClipRecord]:
+    manifest_path = get_clip_exports_manifest_path(project_id)
+    if not manifest_path.exists():
+        return []
+
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+
+    if not isinstance(payload, dict):
+        return []
+
+    exports_raw = payload.get("exports", [])
+    if not isinstance(exports_raw, list):
+        return []
+
+    records: list[ExportedClipRecord] = []
+    for item in exports_raw:
+        record = _parse_export_record(item, project_id)
+        if record is not None:
+            records.append(record)
+    return records
+
+
+def list_project_clip_exports(project_id: str) -> list[ExportClipResponse]:
+    load_project(project_id)
+
+    clips_dir = get_clips_output_dir(project_id)
+    records = _load_exports_manifest_records(project_id)
+    responses: list[ExportClipResponse] = []
+
+    for record in records:
+        if record.export_status != ProcessingStatus.COMPLETED:
+            continue
+
+        clip_path = clips_dir / record.filename
+        if not clip_path.is_file() or clip_path.stat().st_size == 0:
+            continue
+
+        responses.append(_record_to_export_response(project_id, record))
+
+    responses.sort(key=lambda export: export.created_at, reverse=True)
+    return responses
+
+
 def _load_exports_document(project_id: str) -> ClipExportsDocument:
     manifest_path = get_clip_exports_manifest_path(project_id)
     if not manifest_path.exists():
@@ -285,21 +367,7 @@ def export_project_clip(
     )
     _append_export_record(record)
 
-    return ExportClipResponse(
-        clip_id=clip_id,
-        project_id=project_id,
-        filename=filename,
-        relative_path=relative_path,
-        media_url=f"/api/projects/{project_id}/media/clips/{clip_id}",
-        start_time=start_time,
-        end_time=end_time,
-        duration=duration,
-        file_size_bytes=file_size_bytes,
-        candidate_id=candidate_id,
-        clip_name=clip_name,
-        created_at=created_at,
-        export_status=ProcessingStatus.COMPLETED,
-    )
+    return _record_to_export_response(project_id, record)
 
 
 def locate_exported_clip(project_id: str, clip_id: str) -> tuple[ExportedClipRecord, Path]:

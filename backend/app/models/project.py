@@ -306,6 +306,11 @@ class ClipExportsDocument(BaseModel):
     updated_at: str = Field(default_factory=utc_now_iso)
 
 
+class ClipExportsListResponse(BaseModel):
+    project_id: str
+    exports: list[ExportClipResponse] = Field(default_factory=list)
+
+
 def project_to_response(project: ProjectMetadata) -> ProjectResponse:
     return ProjectResponse(
         project_id=project.project_id,

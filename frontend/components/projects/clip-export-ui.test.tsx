@@ -138,6 +138,22 @@ describe("ClipCandidatesPanel export UI", () => {
     expect(screen.getAllByText("Exported").length).toBeGreaterThan(0);
   });
 
+  it("shows restored exported state for candidate_id exports", () => {
+    render(
+      <ClipCandidatesPanel
+        clipCandidates={clipCandidates}
+        filters={defaultClipCandidateFilters}
+        onFiltersChange={() => undefined}
+        onSeek={() => undefined}
+        exportedCandidateIds={new Set(["candidate-123"])}
+        exportStates={{ "candidate-123": { status: "completed" } }}
+        onExport={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /exported/i })).toBeDisabled();
+  });
+
   it("shows backend error messages for failed exports", () => {
     render(
       <ClipCandidatesPanel
@@ -259,11 +275,26 @@ describe("ExportedClipsPanel", () => {
   it("shows session-only empty state guidance", () => {
     render(<ExportedClipsPanel exportedClips={[]} />);
 
+    expect(screen.getByText(/no exported clips yet/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/no exported clips yet/i),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/backend list endpoint is needed/i),
-    ).toBeInTheDocument();
+      screen.queryByText(/backend list endpoint is needed/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows loading state", () => {
+    render(<ExportedClipsPanel exportedClips={[]} loading />);
+
+    expect(screen.getByText(/loading exported clips/i)).toBeInTheDocument();
+  });
+
+  it("shows API error state", () => {
+    render(
+      <ExportedClipsPanel
+        exportedClips={[]}
+        error="Unable to load exported clips."
+      />,
+    );
+
+    expect(screen.getByText("Unable to load exported clips.")).toBeInTheDocument();
   });
 });

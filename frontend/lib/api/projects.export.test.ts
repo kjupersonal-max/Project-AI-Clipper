@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { exportProjectClip, resolveMediaUrl } from "@/lib/api/projects";
+import { exportProjectClip, fetchProjectClipExports, resolveMediaUrl } from "@/lib/api/projects";
 
 describe("exportProjectClip", () => {
   beforeEach(() => {
@@ -70,6 +70,49 @@ describe("exportProjectClip", () => {
       message: "Clip duration exceeds maximum allowed length.",
       status: 422,
     });
+  });
+});
+
+describe("fetchProjectClipExports", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("loads saved exports for a project", async () => {
+    const mockResponse = {
+      project_id: "project-1",
+      exports: [
+        {
+          clip_id: "clip-1",
+          project_id: "project-1",
+          filename: "saved.mp4",
+          relative_path: "project-1/clips/saved.mp4",
+          media_url: "/api/projects/project-1/media/clips/clip-1",
+          start_time: 1,
+          end_time: 2,
+          duration: 1,
+          file_size_bytes: 1000,
+          candidate_id: "candidate-123",
+          clip_name: "Saved clip",
+          created_at: "2026-07-22T10:00:00Z",
+          export_status: "completed",
+        },
+      ],
+    };
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockResponse,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchProjectClipExports("project-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/api/projects/project-1/clips/exports",
+      { cache: "no-store" },
+    );
+    expect(result).toEqual(mockResponse);
   });
 });
 

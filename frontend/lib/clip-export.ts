@@ -1,4 +1,4 @@
-import type { ClipCandidate, ExportClipRequest, SegmentAnalysis } from "@/lib/api/projects";
+import type { ClipCandidate, ExportClipRequest, ExportClipResponse, SegmentAnalysis } from "@/lib/api/projects";
 
 export type CandidateExportStatus = "idle" | "exporting" | "completed" | "failed";
 
@@ -82,4 +82,66 @@ export function isCandidateExporting(
   exportStates: Record<string, CandidateExportState>,
 ): boolean {
   return exportStates[exportKey]?.status === "exporting";
+}
+
+export function mergeExportedClips(
+  saved: ExportClipResponse[],
+  current: ExportClipResponse[],
+): ExportClipResponse[] {
+  const byId = new Map<string, ExportClipResponse>();
+
+  for (const clip of saved) {
+    byId.set(clip.clip_id, clip);
+  }
+  for (const clip of current) {
+    byId.set(clip.clip_id, clip);
+  }
+
+  return [...byId.values()].sort(
+    (left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
+  );
+}
+
+export function buildExportedStateFromClips(exports: ExportClipResponse[]): {
+  exportedCandidateIds: Set<string>;
+  exportStates: Record<string, CandidateExportState>;
+} {
+  const exportedCandidateIds = new Set<string>();
+  const exportStates: Record<string, CandidateExportState> = {};
+
+  for (const clip of exports) {
+    if (!clip.candidate_id) {
+      continue;
+    }
+
+    exportedCandidateIds.add(clip.candidate_id);
+    exportStates[clip.candidate_id] = { status: "completed" };
+  }
+
+  return { exportedCandidateIds, exportStates };
+}
+
+export function applyLoadedExports(
+  savedExports: ExportClipResponse[],
+  currentClips: ExportClipResponse[],
+  currentExportedCandidateIds: ReadonlySet<string>,
+  currentExportStates: Record<string, CandidateExportState>,
+): {
+  exportedClips: ExportClipResponse[];
+  exportedCandidateIds: Set<string>;
+  exportStates: Record<string, CandidateExportState>;
+} {
+  const restored = buildExportedStateFromClips(savedExports);
+
+  return {
+    exportedClips: mergeExportedClips(savedExports, currentClips),
+    exportedCandidateIds: new Set([
+      ...restored.exportedCandidateIds,
+      ...currentExportedCandidateIds,
+    ]),
+    exportStates: {
+      ...restored.exportStates,
+      ...currentExportStates,
+    },
+  };
 }

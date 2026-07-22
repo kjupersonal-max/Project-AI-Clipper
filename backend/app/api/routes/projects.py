@@ -5,6 +5,7 @@ from app.models.project import (
     AnalysisDocument,
     AnalyzeResponse,
     ClipCandidatesDocument,
+    ClipExportsListResponse,
     ExportClipRequest,
     ExportClipResponse,
     ExtractAudioResponse,
@@ -44,6 +45,7 @@ from app.services.clip_export import (
     ClipExportProcessError,
     ClipExportValidationError,
     export_project_clip,
+    list_project_clip_exports,
     locate_exported_clip,
 )
 from app.services.timeline_analysis import (
@@ -165,6 +167,15 @@ def export_clip(project_id: str, request: ExportClipRequest) -> ExportClipRespon
         project.append_log(f"Clip export failed: {exc.message}", level="error")
         save_project(project)
         raise HTTPException(status_code=422, detail=exc.message) from exc
+
+
+@router.get("/{project_id}/clips/exports", response_model=ClipExportsListResponse)
+def get_project_clip_exports(project_id: str) -> ClipExportsListResponse:
+    validate_project_id(project_id)
+    load_project(project_id)
+
+    exports = list_project_clip_exports(project_id)
+    return ClipExportsListResponse(project_id=project_id, exports=exports)
 
 
 @router.post("/{project_id}/inspect", response_model=InspectResponse)
