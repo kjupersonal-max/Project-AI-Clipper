@@ -5,6 +5,8 @@ from app.models.project import (
     AnalysisDocument,
     AnalyzeResponse,
     ClipCandidatesDocument,
+    ExportClipRequest,
+    ExportClipResponse,
     ExtractAudioResponse,
     InspectResponse,
     ProcessingStatus,
@@ -36,6 +38,13 @@ from app.services.clip_selection import (
     cleanup_clip_candidates_output,
     load_project_clip_candidates,
     select_project_clips,
+)
+from app.services.clip_export import (
+    ClipExportNotFoundError,
+    ClipExportProcessError,
+    ClipExportValidationError,
+    export_project_clip,
+    locate_exported_clip,
 )
 from app.services.timeline_analysis import (
     AnalysisNotFoundError,
@@ -93,6 +102,69 @@ def get_project_video(project_id: str) -> FileResponse:
         media_type=media_type,
         filename=project.original_filename,
     )
+
+
+@router.get("/{project_id}/media/clips/{clip_id}")
+def get_project_clip(project_id: str, clip_id: str) -> FileResponse:
+    validate_project_id(project_id)
+    load_project(project_id)
+
+    try:
+        record, clip_path = locate_exported_clip(project_id, clip_id)
+    except ClipExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipExportProcessError as exc:
+        raise HTTPException(status_code=500, detail=exc.message) from exc
+
+    return FileResponse(
+        path=clip_path,
+        media_type="video/mp4",
+        filename=record.filename,
+    )
+
+
+@router.post("/{project_id}/clips/export", response_model=ExportClipResponse)
+def export_clip(project_id: str, request: ExportClipRequest) -> ExportClipResponse:
+    validate_project_id(project_id)
+    project = load_project(project_id)
+
+    project.append_log(
+        f"Clip export started ({request.start_time:.3f}s to {request.end_time:.3f}s)."
+    )
+    save_project(project)
+
+    try:
+        response = export_project_clip(
+            project_id,
+            start_time=request.start_time,
+            end_time=request.end_time,
+            clip_name=request.clip_name,
+            candidate_id=request.candidate_id,
+        )
+        project = load_project(project_id)
+        project.append_log(f"Clip export completed: {response.filename} ({response.clip_id}).")
+        project.last_error = None
+        save_project(project)
+        return response
+    except HTTPException as exc:
+        project = load_project(project_id)
+        detail = exc.detail if isinstance(exc.detail, str) else "Clip export failed."
+        project.last_error = detail
+        project.append_log(f"Clip export failed: {detail}", level="error")
+        save_project(project)
+        raise
+    except ClipExportValidationError as exc:
+        project = load_project(project_id)
+        project.last_error = exc.message
+        project.append_log(f"Clip export failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+    except ClipExportProcessError as exc:
+        project = load_project(project_id)
+        project.last_error = exc.message
+        project.append_log(f"Clip export failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=422, detail=exc.message) from exc
 
 
 @router.post("/{project_id}/inspect", response_model=InspectResponse)

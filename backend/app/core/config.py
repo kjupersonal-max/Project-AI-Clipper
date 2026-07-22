@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     clip_selection_max_gap_seconds: float = 2.5
     clip_selection_max_candidates: int = 10
     clip_selection_min_score: float = 35.0
+    clip_export_max_duration_seconds: float = 120.0
+    clip_export_subdir: str = "clips"
+    clip_exports_manifest_filename: str = "exports.json"
+    clip_export_timeout_seconds: int = 600
 
 
 settings = Settings()

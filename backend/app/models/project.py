@@ -262,6 +262,50 @@ class FFmpegAvailability(BaseModel):
     error: str | None = None
 
 
+class ExportClipRequest(BaseModel):
+    start_time: float = Field(ge=0.0)
+    end_time: float = Field(gt=0.0)
+    clip_name: str | None = None
+    candidate_id: str | None = None
+
+
+class ExportClipResponse(BaseModel):
+    clip_id: str
+    project_id: str
+    filename: str
+    relative_path: str
+    media_url: str
+    start_time: float
+    end_time: float
+    duration: float
+    file_size_bytes: int
+    candidate_id: str | None = None
+    clip_name: str | None = None
+    created_at: str
+    export_status: ProcessingStatus
+
+
+class ExportedClipRecord(BaseModel):
+    clip_id: str
+    project_id: str
+    filename: str
+    relative_path: str
+    start_time: float
+    end_time: float
+    duration: float
+    file_size_bytes: int
+    candidate_id: str | None = None
+    clip_name: str | None = None
+    created_at: str = Field(default_factory=utc_now_iso)
+    export_status: ProcessingStatus = ProcessingStatus.COMPLETED
+
+
+class ClipExportsDocument(BaseModel):
+    project_id: str
+    exports: list[ExportedClipRecord] = Field(default_factory=list)
+    updated_at: str = Field(default_factory=utc_now_iso)
+
+
 def project_to_response(project: ProjectMetadata) -> ProjectResponse:
     return ProjectResponse(
         project_id=project.project_id,

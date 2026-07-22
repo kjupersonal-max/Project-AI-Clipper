@@ -188,6 +188,24 @@ def get_relative_clip_candidates_path(project_id: str) -> str:
     return f"{project_id}/{settings.clip_candidates_output_filename}"
 
 
+def get_clips_output_dir(project_id: str) -> Path:
+    validated_id = validate_project_id(project_id)
+    clips_dir = _resolve_within(
+        settings.processed_dir,
+        settings.processed_dir / validated_id / settings.clip_export_subdir,
+    )
+    clips_dir.mkdir(parents=True, exist_ok=True)
+    return clips_dir
+
+
+def get_clip_exports_manifest_path(project_id: str) -> Path:
+    return get_clips_output_dir(project_id) / settings.clip_exports_manifest_filename
+
+
+def get_relative_clip_path(project_id: str, filename: str) -> str:
+    return f"{project_id}/{settings.clip_export_subdir}/{filename}"
+
+
 def update_project(project_id: str, updater) -> ProjectMetadata:
     project = load_project(project_id)
     updater(project)
