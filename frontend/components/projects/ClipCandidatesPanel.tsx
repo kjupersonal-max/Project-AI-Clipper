@@ -4,9 +4,22 @@ import {
   filterAndSortClipCandidates,
   getClipEmotionOptions,
 } from "@/lib/clip-candidate-filters";
+import type { CandidateExportState } from "@/lib/clip-export";
+import {
+  isCandidateExported,
+  isCandidateExporting,
+} from "@/lib/clip-export";
 import { Badge } from "@/components/ui/Badge";
+import { ClipExportButton } from "@/components/projects/ClipExportButton";
 import { formatDuration } from "@/lib/utils";
-import { AlertTriangle, Clock3, Film, Loader2, Scissors } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Clock3,
+  Film,
+  Loader2,
+  Scissors,
+} from "lucide-react";
 import { useMemo } from "react";
 
 type ClipCandidatesPanelProps = {
@@ -14,6 +27,9 @@ type ClipCandidatesPanelProps = {
   filters: ClipCandidateFilters;
   onFiltersChange: (filters: ClipCandidateFilters) => void;
   onSeek: (seconds: number) => void;
+  exportStates?: Record<string, CandidateExportState>;
+  exportedCandidateIds?: ReadonlySet<string>;
+  onExport?: (candidate: ClipCandidate) => void;
 };
 
 function formatTimestamp(seconds: number): string {
@@ -55,10 +71,18 @@ function ClipCandidateCard({
   candidate,
   rank,
   onSeek,
+  exportState,
+  isExported,
+  isExporting,
+  onExport,
 }: {
   candidate: ClipCandidate;
   rank: number;
   onSeek: (seconds: number) => void;
+  exportState?: CandidateExportState;
+  isExported: boolean;
+  isExporting: boolean;
+  onExport?: (candidate: ClipCandidate) => void;
 }) {
   return (
     <div className="overflow-hidden rounded-lg border border-amber-500/30 bg-zinc-950/50 ring-1 ring-amber-500/10">
@@ -68,6 +92,12 @@ function ClipCandidateCard({
           <Badge variant="info">{candidate.status}</Badge>
           <Badge variant="default">Score {candidate.score.toFixed(1)}</Badge>
           <Badge variant="muted">Confidence {(candidate.confidence * 100).toFixed(0)}%</Badge>
+          {isExported ? (
+            <Badge variant="success">
+              <CheckCircle2 className="mr-1 inline h-3 w-3" />
+              Exported
+            </Badge>
+          ) : null}
         </div>
 
         <div>
@@ -95,6 +125,17 @@ function ClipCandidateCard({
           <ScorePill label="Standalone" value={candidate.standalone_score} />
           <ScorePill label="Context dep." value={candidate.context_dependency_score} />
         </div>
+
+        {onExport ? (
+          <div className="space-y-2 border-t border-zinc-800/80 pt-3">
+            <ClipExportButton
+              exportState={exportState}
+              isExported={isExported}
+              isExporting={isExporting}
+              onExport={() => onExport(candidate)}
+            />
+          </div>
+        ) : null}
       </div>
 
       <div className="border-t border-amber-500/20 bg-amber-500/5 px-4 py-3">
@@ -110,6 +151,9 @@ export function ClipCandidatesPanel({
   filters,
   onFiltersChange,
   onSeek,
+  exportStates = {},
+  exportedCandidateIds = new Set<string>(),
+  onExport,
 }: ClipCandidatesPanelProps) {
   const emotionOptions = useMemo(
     () => getClipEmotionOptions(clipCandidates.candidates),
@@ -282,6 +326,14 @@ export function ClipCandidatesPanel({
                 candidate={candidate}
                 rank={index + 1}
                 onSeek={onSeek}
+                exportState={exportStates[candidate.clip_id]}
+                isExported={isCandidateExported(
+                  candidate.clip_id,
+                  exportedCandidateIds,
+                  exportStates,
+                )}
+                isExporting={isCandidateExporting(candidate.clip_id, exportStates)}
+                onExport={onExport}
               />
             ))}
           </div>

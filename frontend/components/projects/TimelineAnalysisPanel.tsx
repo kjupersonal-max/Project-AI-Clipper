@@ -4,7 +4,14 @@ import {
   defaultAnalysisFilters,
   filterSegmentAnalysis,
 } from "@/lib/analysis-filters";
+import type { CandidateExportState } from "@/lib/clip-export";
+import {
+  buildExportKeyFromSegment,
+  isCandidateExported,
+  isCandidateExporting,
+} from "@/lib/clip-export";
 import { Badge } from "@/components/ui/Badge";
+import { ClipExportButton } from "@/components/projects/ClipExportButton";
 import { cn, formatDuration } from "@/lib/utils";
 import { AlertTriangle, ChevronDown, Clock3, Loader2, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -13,6 +20,9 @@ type TimelineAnalysisPanelProps = {
   analysis: AnalysisDocument;
   filters?: AnalysisFilters;
   onSeek: (seconds: number) => void;
+  exportStates?: Record<string, CandidateExportState>;
+  exportedCandidateIds?: ReadonlySet<string>;
+  onExportSegment?: (segment: SegmentAnalysis) => void;
 };
 
 function formatTimestamp(seconds: number): string {
@@ -55,11 +65,19 @@ function SegmentAnalysisCard({
   expanded,
   onToggle,
   onSeek,
+  exportState,
+  isExported,
+  isExporting,
+  onExportSegment,
 }: {
   segment: SegmentAnalysis;
   expanded: boolean;
   onToggle: () => void;
   onSeek: (seconds: number) => void;
+  exportState?: CandidateExportState;
+  isExported: boolean;
+  isExporting: boolean;
+  onExportSegment?: (segment: SegmentAnalysis) => void;
 }) {
   return (
     <div
@@ -94,6 +112,9 @@ function SegmentAnalysisCard({
             {segment.clip_candidate ? (
               <Badge variant="warning">Clip candidate</Badge>
             ) : null}
+            {segment.clip_candidate && isExported ? (
+              <Badge variant="success">Exported</Badge>
+            ) : null}
           </div>
 
           <div
@@ -120,6 +141,17 @@ function SegmentAnalysisCard({
             <ScorePill label="Standalone" value={segment.standalone_score} />
             <ScorePill label="Context dep." value={segment.context_dependency_score} />
           </div>
+
+          {segment.clip_candidate && onExportSegment ? (
+            <div className="border-t border-zinc-800/80 pt-3">
+              <ClipExportButton
+                exportState={exportState}
+                isExported={isExported}
+                isExporting={isExporting}
+                onExport={() => onExportSegment(segment)}
+              />
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -142,6 +174,9 @@ export function TimelineAnalysisPanel({
   analysis,
   filters = defaultAnalysisFilters,
   onSeek,
+  exportStates = {},
+  exportedCandidateIds = new Set<string>(),
+  onExportSegment,
 }: TimelineAnalysisPanelProps) {
   const [expandedSegments, setExpandedSegments] = useState<Set<number>>(
     () => new Set(analysis.segments.filter((segment) => segment.clip_candidate).map((s) => s.segment_id)),
@@ -250,15 +285,27 @@ export function TimelineAnalysisPanel({
           </p>
         ) : (
           <div className="space-y-2">
-            {filteredSegments.map((segment) => (
-              <SegmentAnalysisCard
-                key={segment.segment_id}
-                segment={segment}
-                expanded={expandedSegments.has(segment.segment_id)}
-                onToggle={() => toggleSegment(segment.segment_id)}
-                onSeek={onSeek}
-              />
-            ))}
+            {filteredSegments.map((segment) => {
+              const exportKey = buildExportKeyFromSegment(segment);
+
+              return (
+                <SegmentAnalysisCard
+                  key={segment.segment_id}
+                  segment={segment}
+                  expanded={expandedSegments.has(segment.segment_id)}
+                  onToggle={() => toggleSegment(segment.segment_id)}
+                  onSeek={onSeek}
+                  exportState={exportStates[exportKey]}
+                  isExported={isCandidateExported(
+                    exportKey,
+                    exportedCandidateIds,
+                    exportStates,
+                  )}
+                  isExporting={isCandidateExporting(exportKey, exportStates)}
+                  onExportSegment={segment.clip_candidate ? onExportSegment : undefined}
+                />
+              );
+            })}
           </div>
         )}
       </div>

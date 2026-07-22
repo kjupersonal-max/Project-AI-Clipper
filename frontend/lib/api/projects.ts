@@ -195,6 +195,29 @@ export type SelectClipsResponse = {
   clip_candidates_path: string;
 };
 
+export type ExportClipRequest = {
+  start_time: number;
+  end_time: number;
+  clip_name?: string | null;
+  candidate_id?: string | null;
+};
+
+export type ExportClipResponse = {
+  clip_id: string;
+  project_id: string;
+  filename: string;
+  relative_path: string;
+  media_url: string;
+  start_time: number;
+  end_time: number;
+  duration: number;
+  file_size_bytes: number;
+  candidate_id: string | null;
+  clip_name: string | null;
+  created_at: string;
+  export_status: ProcessingStatus;
+};
+
 export type ApiError = {
   message: string;
   status?: number;
@@ -339,4 +362,36 @@ export async function fetchProjectClipCandidates(
 
 export function getProjectVideoUrl(projectId: string): string {
   return `${API_BASE_URL}/api/projects/${projectId}/media/video`;
+}
+
+export function getProjectClipMediaUrl(projectId: string, clipId: string): string {
+  return `${API_BASE_URL}/api/projects/${projectId}/media/clips/${clipId}`;
+}
+
+export function resolveMediaUrl(mediaUrl: string): string {
+  if (mediaUrl.startsWith("http://") || mediaUrl.startsWith("https://")) {
+    return mediaUrl;
+  }
+
+  const path = mediaUrl.startsWith("/") ? mediaUrl : `/${mediaUrl}`;
+  return `${API_BASE_URL.replace(/\/$/, "")}${path}`;
+}
+
+export async function exportProjectClip(
+  projectId: string,
+  request: ExportClipRequest,
+): Promise<ExportClipResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/clips/export`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<ExportClipResponse>;
 }

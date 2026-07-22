@@ -2,6 +2,7 @@
 
 import {
   analyzeProject,
+  exportProjectClip,
   extractProjectAudio,
   fetchProject,
   fetchProjectAnalysis,
@@ -13,8 +14,12 @@ import {
   transcribeProject,
   type AnalysisDocument,
   type ApiError,
+  type ClipCandidate,
   type ClipCandidatesDocument,
+  type ExportClipRequest,
+  type ExportClipResponse,
   type Project,
+  type SegmentAnalysis,
   type TranscriptDocument,
 } from "@/lib/api/projects";
 import { Badge } from "@/components/ui/Badge";
@@ -24,6 +29,10 @@ import {
   ClipCandidatesPanel,
   ClipCandidatesState,
 } from "@/components/projects/ClipCandidatesPanel";
+import {
+  ExportedClipsPanel,
+  ExportedClipsSummary,
+} from "@/components/projects/ExportedClipsPanel";
 import {
   TimelineAnalysisPanel,
   TimelineAnalysisState,
@@ -38,6 +47,15 @@ import {
   defaultClipCandidateFilters,
   type ClipCandidateFilters,
 } from "@/lib/clip-candidate-filters";
+import {
+  buildExportClipRequest,
+  buildExportClipRequestFromSegment,
+  buildExportKeyFromCandidate,
+  buildExportKeyFromSegment,
+  isCandidateExported,
+  isCandidateExporting,
+  type CandidateExportState,
+} from "@/lib/clip-export";
 import {
   AlertCircle,
   AudioLines,
@@ -101,6 +119,11 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
   const [analysisFilters, setAnalysisFilters] = useState<AnalysisFilters>(defaultAnalysisFilters);
   const [clipCandidateFilters, setClipCandidateFilters] = useState<ClipCandidateFilters>(
     defaultClipCandidateFilters,
+  );
+  const [exportedClips, setExportedClips] = useState<ExportClipResponse[]>([]);
+  const [exportStates, setExportStates] = useState<Record<string, CandidateExportState>>({});
+  const [exportedCandidateIds, setExportedCandidateIds] = useState<Set<string>>(
+    () => new Set(),
   );
 
   const isActionLoading =
@@ -229,6 +252,64 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
       // Autoplay may be blocked until the user interacts with the page.
     });
   }, []);
+
+  const handleExport = useCallback(
+    async (exportKey: string, request: ExportClipRequest) => {
+      if (
+        isCandidateExported(exportKey, exportedCandidateIds, exportStates) ||
+        isCandidateExporting(exportKey, exportStates)
+      ) {
+        return;
+      }
+
+      setExportStates((current) => ({
+        ...current,
+        [exportKey]: { status: "exporting" },
+      }));
+
+      try {
+        const response = await exportProjectClip(projectId, request);
+
+        setExportedClips((current) => [response, ...current]);
+        setExportedCandidateIds((current) => new Set(current).add(exportKey));
+        setExportStates((current) => ({
+          ...current,
+          [exportKey]: { status: "completed" },
+        }));
+      } catch (error) {
+        const message =
+          error && typeof error === "object" && "message" in error
+            ? String((error as ApiError).message)
+            : "Clip export failed.";
+
+        setExportStates((current) => ({
+          ...current,
+          [exportKey]: { status: "failed", error: message },
+        }));
+      }
+    },
+    [exportStates, exportedCandidateIds, projectId],
+  );
+
+  const handleExportSegment = useCallback(
+    (segment: SegmentAnalysis) => {
+      void handleExport(
+        buildExportKeyFromSegment(segment),
+        buildExportClipRequestFromSegment(segment),
+      );
+    },
+    [handleExport],
+  );
+
+  const handleExportClip = useCallback(
+    (candidate: ClipCandidate) => {
+      void handleExport(
+        buildExportKeyFromCandidate(candidate),
+        buildExportClipRequest(candidate),
+      );
+    },
+    [handleExport],
+  );
 
   const loadProject = useCallback(async () => {
     setPageError(null);
@@ -808,7 +889,7 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
           title="Timeline Analysis"
           description={
             project.analysis_status === "completed"
-              ? "Segment scoring and clip candidate metadata"
+              ? "Segment scoring and clip candidates — export directly from highlighted segments"
               : "Analyze the completed transcript to score clip candidates"
           }
         />
@@ -818,6 +899,9 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
               analysis={analysis}
               filters={analysisFilters}
               onSeek={seekVideoTo}
+              exportStates={exportStates}
+              exportedCandidateIds={exportedCandidateIds}
+              onExportSegment={handleExportSegment}
             />
           ) : (
             <TimelineAnalysisState
@@ -849,8 +933,8 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
           title="Clip Candidates"
           description={
             project.clip_selection_status === "completed"
-              ? "Ranked proposed clip ranges — not rendered video files"
-              : "Run clip selection after analysis to propose short-form clips"
+              ? "Ranked proposed clip ranges from Select Clips — not rendered video files"
+              : "Optional ranked clip selection after analysis. You can export directly from Timeline Analysis above."
           }
         />
         <CardContent>
@@ -860,6 +944,9 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
               filters={clipCandidateFilters}
               onFiltersChange={setClipCandidateFilters}
               onSeek={seekVideoTo}
+              exportStates={exportStates}
+              exportedCandidateIds={exportedCandidateIds}
+              onExport={handleExportClip}
             />
           ) : (
             <ClipCandidatesState
@@ -873,9 +960,21 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
           !clipCandidatesError &&
           project.clip_selection_status !== "completed" ? (
             <p className="text-sm text-zinc-500">
-              No clip candidates yet. Complete analysis, then click Select Clips.
+              No ranked clip candidates yet. Export directly from Timeline Analysis above, or click
+              Select Clips to generate ranked ranges.
             </p>
           ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="Exported Clips"
+          description="Rendered MP4 files exported from clip candidates in this session"
+          action={<ExportedClipsSummary count={exportedClips.length} />}
+        />
+        <CardContent>
+          <ExportedClipsPanel exportedClips={exportedClips} />
         </CardContent>
       </Card>
 
