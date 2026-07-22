@@ -3,23 +3,31 @@
 import {
   extractProjectAudio,
   fetchProject,
+  fetchProjectTranscript,
   getProjectVideoUrl,
   inspectProject,
+  transcribeProject,
   type ApiError,
   type Project,
+  type TranscriptDocument,
 } from "@/lib/api/projects";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader } from "@/components/ui/Card";
-import { cn, formatFileSize } from "@/lib/utils";
+import {
+  TranscriptViewer,
+  TranscriptViewerState,
+} from "@/components/projects/TranscriptViewer";
+import { cn, formatDuration, formatFileSize } from "@/lib/utils";
 import {
   AlertCircle,
   AudioLines,
   CheckCircle2,
   Loader2,
   ScanSearch,
+  Subtitles,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type ProjectDetailsProps = {
   projectId: string;
@@ -44,33 +52,85 @@ const statusVariant = (
   }
 };
 
-function formatDuration(seconds: number | null | undefined): string {
-  if (seconds == null) return "—";
-  const total = Math.round(seconds);
-  const minutes = Math.floor(total / 60);
-  const remaining = total % 60;
-  return minutes > 0 ? `${minutes}m ${remaining}s` : `${remaining}s`;
-}
-
 function formatFrameRate(value: number | null | undefined): string {
   if (value == null) return "—";
   return `${value.toFixed(2)} fps`;
 }
 
 export function ProjectDetails({ projectId }: ProjectDetailsProps) {
+  const videoRef = useRef<HTMLVideoElement>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [pageError, setPageError] = useState<string | null>(null);
   const [inspectState, setInspectState] = useState<ActionState>("idle");
   const [extractState, setExtractState] = useState<ActionState>("idle");
+  const [transcribeState, setTranscribeState] = useState<ActionState>("idle");
+  const [transcript, setTranscript] = useState<TranscriptDocument | null>(null);
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [transcriptError, setTranscriptError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  const isActionLoading =
+    inspectState === "loading" ||
+    extractState === "loading" ||
+    transcribeState === "loading";
+
+  const loadTranscript = useCallback(async () => {
+    setTranscriptLoading(true);
+    setTranscriptError(null);
+
+    try {
+      const data = await fetchProjectTranscript(projectId);
+      setTranscript(data);
+      return data;
+    } catch (error) {
+      const status =
+        error && typeof error === "object" && "status" in error
+          ? (error as ApiError).status
+          : undefined;
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? String((error as ApiError).message)
+          : "Unable to load transcript.";
+
+      setTranscript(null);
+      if (status !== 404) {
+        setTranscriptError(message);
+      }
+      return null;
+    } finally {
+      setTranscriptLoading(false);
+    }
+  }, [projectId]);
+
+  const applyProjectState = useCallback(
+    async (data: Project) => {
+      setProject(data);
+      if (data.transcription_status === "completed") {
+        await loadTranscript();
+      } else {
+        setTranscript(null);
+        setTranscriptError(null);
+      }
+    },
+    [loadTranscript],
+  );
+
+  const seekVideoTo = useCallback((seconds: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = seconds;
+    void video.play().catch(() => {
+      // Autoplay may be blocked until the user interacts with the page.
+    });
+  }, []);
 
   const loadProject = useCallback(async () => {
     setPageError(null);
 
     try {
       const data = await fetchProject(projectId);
-      setProject(data);
+      await applyProjectState(data);
       return data;
     } catch (error) {
       const message =
@@ -79,9 +139,10 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
           : "Unable to load project.";
       setPageError(message);
       setProject(null);
+      setTranscript(null);
       return null;
     }
-  }, [projectId]);
+  }, [applyProjectState, projectId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -93,7 +154,7 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
       try {
         const data = await fetchProject(projectId);
         if (!cancelled) {
-          setProject(data);
+          await applyProjectState(data);
         }
       } catch (error) {
         if (!cancelled) {
@@ -116,7 +177,7 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [applyProjectState, projectId]);
 
   const refreshProject = async () => {
     setLoading(true);
@@ -162,6 +223,26 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
     }
   };
 
+  const handleTranscribe = async () => {
+    setTranscribeState("loading");
+    setActionError(null);
+    setTranscriptError(null);
+
+    try {
+      await transcribeProject(projectId);
+      setTranscribeState("success");
+      await refreshProject();
+    } catch (error) {
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? String((error as ApiError).message)
+          : "Transcription failed.";
+      setActionError(message);
+      setTranscribeState("error");
+      await refreshProject();
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-24 text-sm text-zinc-500">
@@ -203,6 +284,9 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
             <Badge variant={statusVariant(project.audio_extraction_status)}>
               Audio: {project.audio_extraction_status}
             </Badge>
+            <Badge variant={statusVariant(project.transcription_status)}>
+              Transcript: {project.transcription_status}
+            </Badge>
           </div>
           <div>
             <h1 className="text-2xl font-semibold tracking-tight text-zinc-50 sm:text-3xl">
@@ -218,7 +302,7 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
           <Button
             variant="secondary"
             onClick={handleInspect}
-            disabled={inspectState === "loading" || extractState === "loading"}
+            disabled={isActionLoading}
             icon={
               inspectState === "loading" ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -230,8 +314,9 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
             Inspect Video
           </Button>
           <Button
+            variant="secondary"
             onClick={handleExtractAudio}
-            disabled={inspectState === "loading" || extractState === "loading"}
+            disabled={isActionLoading}
             icon={
               extractState === "loading" ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -241,6 +326,19 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
             }
           >
             Extract Audio
+          </Button>
+          <Button
+            onClick={handleTranscribe}
+            disabled={isActionLoading || project.audio_extraction_status !== "completed"}
+            icon={
+              transcribeState === "loading" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Subtitles className="h-4 w-4" />
+              )
+            }
+          >
+            {transcribeState === "loading" ? "Transcribing..." : "Transcribe"}
           </Button>
         </div>
       </div>
@@ -254,15 +352,35 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
         </Card>
       ) : null}
 
-      {(inspectState === "success" || extractState === "success") && !actionError ? (
+      {(inspectState === "success" ||
+        extractState === "success" ||
+        transcribeState === "success") &&
+      !actionError ? (
         <Card>
           <CardContent className="flex items-start gap-3 p-5">
             <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
             <p className="text-sm text-emerald-300">
-              {extractState === "success"
-                ? "Audio extraction completed. Project state refreshed."
-                : "Video inspection completed. Project state refreshed."}
+              {transcribeState === "success"
+                ? "Transcription completed. Transcript loaded below."
+                : extractState === "success"
+                  ? "Audio extraction completed. Project state refreshed."
+                  : "Video inspection completed. Project state refreshed."}
             </p>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {transcribeState === "loading" ? (
+        <Card>
+          <CardContent className="flex items-start gap-3 p-5">
+            <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-amber-300" />
+            <div>
+              <p className="text-sm font-medium text-zinc-200">Transcription in progress</p>
+              <p className="mt-1 text-sm text-zinc-500">
+                Running faster-whisper on the extracted audio. This may take a minute for longer
+                clips.
+              </p>
+            </div>
           </CardContent>
         </Card>
       ) : null}
@@ -273,6 +391,7 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
           <CardContent>
             <div className="overflow-hidden rounded-lg border border-zinc-800 bg-black">
               <video
+                ref={videoRef}
                 src={getProjectVideoUrl(project.project_id)}
                 controls
                 className="aspect-video w-full bg-black object-contain"
@@ -346,6 +465,12 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
                   {project.audio_extraction_status}
                 </Badge>
               </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-zinc-500">Transcription</span>
+                <Badge variant={statusVariant(project.transcription_status)}>
+                  {project.transcription_status}
+                </Badge>
+              </div>
               {project.extracted_audio_path ? (
                 <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
                   <p className="text-xs uppercase tracking-wider text-zinc-500">
@@ -362,6 +487,19 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
                   ) : null}
                 </div>
               ) : null}
+              {project.transcript_path ? (
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+                  <p className="text-xs uppercase tracking-wider text-zinc-500">Transcript</p>
+                  <p className="mt-1 break-all font-mono text-xs text-zinc-300">
+                    {project.transcript_path}
+                  </p>
+                  {project.detected_language ? (
+                    <p className="mt-2 text-xs text-zinc-500">
+                      Language: {project.detected_language.toUpperCase()}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
               {project.last_error ? (
                 <p className="text-xs text-red-300">Last error: {project.last_error}</p>
               ) : null}
@@ -369,6 +507,36 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
           </Card>
         </div>
       </div>
+
+      <Card>
+        <CardHeader
+          title="Transcript"
+          description={
+            project.transcription_status === "completed"
+              ? "Segment-level transcript with clickable timestamps"
+              : "Run transcription after audio extraction to generate a transcript"
+          }
+        />
+        <CardContent>
+          {transcript ? (
+            <TranscriptViewer transcript={transcript} onSeek={seekVideoTo} />
+          ) : (
+            <TranscriptViewerState
+              loading={transcriptLoading || transcribeState === "loading"}
+              error={transcriptError}
+            />
+          )}
+          {!transcript &&
+          !transcriptLoading &&
+          transcribeState !== "loading" &&
+          !transcriptError &&
+          project.transcription_status !== "completed" ? (
+            <p className="text-sm text-zinc-500">
+              No transcript yet. Extract audio, then click Transcribe to generate one.
+            </p>
+          ) : null}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader title="Processing Activity Log" />

@@ -10,6 +10,10 @@ backend/processed/*
 backend/audio/*
 !backend/audio/.gitkeep
 
+# Transcripts
+backend/transcripts/*
+!backend/transcripts/.gitkeep
+
 # Python
 backend/.venv/
 backend/venv/

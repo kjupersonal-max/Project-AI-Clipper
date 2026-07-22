@@ -6,13 +6,26 @@ from app.models.project import (
     InspectResponse,
     ProcessingStatus,
     ProjectResponse,
+    TranscribeResponse,
+    TranscriptDocument,
     project_to_response,
+    utc_now_iso,
 )
 from app.services.project_store import (
+    get_relative_transcript_path,
     load_project,
     locate_video_file,
     save_project,
     validate_project_id,
+)
+from app.services.transcription import (
+    TranscriptionAudioNotFoundError,
+    TranscriptionProcessError,
+    TranscriptNotFoundError,
+    WhisperModelLoadError,
+    cleanup_transcript_output,
+    load_project_transcript,
+    transcribe_project_audio,
 )
 from app.services.video_processing import (
     FFprobeError,
@@ -140,5 +153,90 @@ def extract_audio(project_id: str) -> ExtractAudioResponse:
         project.extracted_audio_duration_seconds = None
         project.last_error = exc.message
         project.append_log(f"Audio extraction failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+
+
+@router.get("/{project_id}/transcript", response_model=TranscriptDocument)
+def get_project_transcript(project_id: str) -> TranscriptDocument:
+    validate_project_id(project_id)
+    try:
+        return load_project_transcript(project_id)
+    except TranscriptNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except TranscriptionProcessError as exc:
+        raise HTTPException(status_code=500, detail=exc.message) from exc
+
+
+@router.post("/{project_id}/transcribe", response_model=TranscribeResponse)
+def transcribe_project(project_id: str) -> TranscribeResponse:
+    validate_project_id(project_id)
+    project = load_project(project_id)
+
+    started_at = utc_now_iso()
+    project.transcription_status = ProcessingStatus.PROCESSING
+    project.transcription_started_at = started_at
+    project.transcription_completed_at = None
+    project.transcript_path = None
+    project.detected_language = None
+    project.last_error = None
+    project.append_log("Transcription started.")
+    save_project(project)
+
+    try:
+        document = transcribe_project_audio(project_id)
+        relative_path = get_relative_transcript_path(project_id)
+        project = load_project(project_id)
+        project.transcription_status = ProcessingStatus.COMPLETED
+        project.transcript_path = relative_path
+        project.detected_language = document.language
+        project.transcription_completed_at = utc_now_iso()
+        project.last_error = None
+        project.append_log("Transcription completed.")
+        save_project(project)
+
+        return TranscribeResponse(
+            project_id=project_id,
+            status="completed",
+            language=document.language,
+            duration=document.duration,
+            segment_count=document.segment_count,
+            word_count=document.word_count,
+            transcript_path=relative_path,
+        )
+    except HTTPException as exc:
+        cleanup_transcript_output(project_id)
+        project = load_project(project_id)
+        project.transcription_status = ProcessingStatus.FAILED
+        detail = exc.detail if isinstance(exc.detail, str) else "Transcription failed."
+        project.last_error = detail
+        project.transcription_completed_at = utc_now_iso()
+        project.append_log(f"Transcription failed: {detail}", level="error")
+        save_project(project)
+        raise
+    except TranscriptionAudioNotFoundError as exc:
+        project = load_project(project_id)
+        project.transcription_status = ProcessingStatus.FAILED
+        project.last_error = exc.message
+        project.transcription_completed_at = utc_now_iso()
+        project.append_log(f"Transcription failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except WhisperModelLoadError as exc:
+        cleanup_transcript_output(project_id)
+        project = load_project(project_id)
+        project.transcription_status = ProcessingStatus.FAILED
+        project.last_error = exc.message
+        project.transcription_completed_at = utc_now_iso()
+        project.append_log(f"Transcription failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=503, detail=exc.message) from exc
+    except TranscriptionProcessError as exc:
+        cleanup_transcript_output(project_id)
+        project = load_project(project_id)
+        project.transcription_status = ProcessingStatus.FAILED
+        project.last_error = exc.message
+        project.transcription_completed_at = utc_now_iso()
+        project.append_log(f"Transcription failed: {exc.message}", level="error")
         save_project(project)
         raise HTTPException(status_code=422, detail=exc.message) from exc

@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     upload_dir: Path = BACKEND_ROOT / "uploads"
     processed_dir: Path = BACKEND_ROOT / "processed"
     audio_dir: Path = BACKEND_ROOT / "audio"
+    transcripts_dir: Path = BACKEND_ROOT / "transcripts"
     max_upload_size_bytes: int = 5 * 1024 * 1024 * 1024  # 5 GB
     allowed_extensions: set[str] = {".mp4", ".mov", ".mkv", ".webm"}
     chunk_size_bytes: int = 1024 * 1024  # 1 MB
@@ -20,6 +21,10 @@ class Settings(BaseSettings):
     ffprobe_timeout_seconds: int = 120
     ffmpeg_timeout_seconds: int = 600
     audio_output_filename: str = "audio.wav"
+    transcript_output_filename: str = "transcript.json"
+    whisper_model_size: str = "base"
+    whisper_device: str = "cpu"
+    whisper_compute_type: str = "int8"
 
 
 settings = Settings()

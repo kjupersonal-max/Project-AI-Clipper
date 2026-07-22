@@ -32,3 +32,11 @@ export function formatFileSize(bytes: number): string {
 
   return `${value >= 10 || index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
 }
+
+export function formatDuration(seconds: number | null | undefined): string {
+  if (seconds == null) return "—";
+  const total = Math.round(seconds);
+  const minutes = Math.floor(total / 60);
+  const remaining = total % 60;
+  return minutes > 0 ? `${minutes}m ${remaining}s` : `${remaining}s`;
+}

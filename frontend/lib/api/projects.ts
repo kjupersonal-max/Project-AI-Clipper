@@ -35,9 +35,14 @@ export type Project = {
   upload_status: ProcessingStatus;
   inspection_status: ProcessingStatus;
   audio_extraction_status: ProcessingStatus;
+  transcription_status: ProcessingStatus;
   video_metadata: VideoMetadata | null;
   extracted_audio_path: string | null;
   extracted_audio_duration_seconds: number | null;
+  transcript_path: string | null;
+  detected_language: string | null;
+  transcription_started_at: string | null;
+  transcription_completed_at: string | null;
   size_bytes: number;
   activity_log: ActivityLogEntry[];
   created_at: string;
@@ -59,6 +64,41 @@ export type ExtractAudioResponse = {
   duration_seconds: number | null;
   status: string;
   message: string;
+};
+
+export type TranscriptWord = {
+  word: string;
+  start: number;
+  end: number;
+  probability: number | null;
+};
+
+export type TranscriptSegment = {
+  id: number;
+  start: number;
+  end: number;
+  text: string;
+  words: TranscriptWord[];
+};
+
+export type TranscriptDocument = {
+  project_id: string;
+  language: string;
+  duration: number;
+  segment_count: number;
+  word_count: number;
+  segments: TranscriptSegment[];
+  created_at: string;
+};
+
+export type TranscribeResponse = {
+  project_id: string;
+  status: string;
+  language: string;
+  duration: number;
+  segment_count: number;
+  word_count: number;
+  transcript_path: string;
 };
 
 export type ApiError = {
@@ -116,6 +156,34 @@ export async function extractProjectAudio(
   }
 
   return response.json() as Promise<ExtractAudioResponse>;
+}
+
+export async function transcribeProject(
+  projectId: string,
+): Promise<TranscribeResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/transcribe`, {
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<TranscribeResponse>;
+}
+
+export async function fetchProjectTranscript(
+  projectId: string,
+): Promise<TranscriptDocument> {
+  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/transcript`, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<TranscriptDocument>;
 }
 
 export function getProjectVideoUrl(projectId: string): string {

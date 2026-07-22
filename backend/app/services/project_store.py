@@ -49,6 +49,7 @@ def ensure_backend_dirs() -> None:
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     settings.processed_dir.mkdir(parents=True, exist_ok=True)
     settings.audio_dir.mkdir(parents=True, exist_ok=True)
+    settings.transcripts_dir.mkdir(parents=True, exist_ok=True)
 
 
 def create_project_metadata(
@@ -129,6 +130,24 @@ def get_audio_output_path(project_id: str) -> Path:
 
 def get_relative_audio_path(project_id: str) -> str:
     return f"{project_id}/{settings.audio_output_filename}"
+
+
+def get_transcript_output_dir(project_id: str) -> Path:
+    validated_id = validate_project_id(project_id)
+    transcript_dir = _resolve_within(
+        settings.transcripts_dir,
+        settings.transcripts_dir / validated_id,
+    )
+    transcript_dir.mkdir(parents=True, exist_ok=True)
+    return transcript_dir
+
+
+def get_transcript_output_path(project_id: str) -> Path:
+    return get_transcript_output_dir(project_id) / settings.transcript_output_filename
+
+
+def get_relative_transcript_path(project_id: str) -> str:
+    return f"{project_id}/{settings.transcript_output_filename}"
 
 
 def update_project(project_id: str, updater) -> ProjectMetadata:

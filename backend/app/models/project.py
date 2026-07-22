@@ -48,9 +48,14 @@ class ProjectMetadata(BaseModel):
     upload_status: ProcessingStatus = ProcessingStatus.COMPLETED
     inspection_status: ProcessingStatus = ProcessingStatus.PENDING
     audio_extraction_status: ProcessingStatus = ProcessingStatus.PENDING
+    transcription_status: ProcessingStatus = ProcessingStatus.PENDING
     video_metadata: VideoMetadata | None = None
     extracted_audio_path: str | None = None
     extracted_audio_duration_seconds: float | None = None
+    transcript_path: str | None = None
+    detected_language: str | None = None
+    transcription_started_at: str | None = None
+    transcription_completed_at: str | None = None
     activity_log: list[ActivityLogEntry] = Field(default_factory=list)
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
@@ -73,9 +78,14 @@ class ProjectResponse(BaseModel):
     upload_status: ProcessingStatus
     inspection_status: ProcessingStatus
     audio_extraction_status: ProcessingStatus
+    transcription_status: ProcessingStatus
     video_metadata: VideoMetadata | None = None
     extracted_audio_path: str | None = None
     extracted_audio_duration_seconds: float | None = None
+    transcript_path: str | None = None
+    detected_language: str | None = None
+    transcription_started_at: str | None = None
+    transcription_completed_at: str | None = None
     size_bytes: int
     activity_log: list[ActivityLogEntry]
     created_at: str
@@ -99,6 +109,41 @@ class ExtractAudioResponse(BaseModel):
     message: str
 
 
+class TranscriptWord(BaseModel):
+    word: str
+    start: float
+    end: float
+    probability: float | None = None
+
+
+class TranscriptSegment(BaseModel):
+    id: int
+    start: float
+    end: float
+    text: str
+    words: list[TranscriptWord] = Field(default_factory=list)
+
+
+class TranscriptDocument(BaseModel):
+    project_id: str
+    language: str
+    duration: float
+    segment_count: int
+    word_count: int
+    segments: list[TranscriptSegment]
+    created_at: str = Field(default_factory=utc_now_iso)
+
+
+class TranscribeResponse(BaseModel):
+    project_id: str
+    status: str
+    language: str
+    duration: float
+    segment_count: int
+    word_count: int
+    transcript_path: str
+
+
 class FFmpegAvailability(BaseModel):
     ffmpeg_available: bool
     ffprobe_available: bool
@@ -115,9 +160,14 @@ def project_to_response(project: ProjectMetadata) -> ProjectResponse:
         upload_status=project.upload_status,
         inspection_status=project.inspection_status,
         audio_extraction_status=project.audio_extraction_status,
+        transcription_status=project.transcription_status,
         video_metadata=project.video_metadata,
         extracted_audio_path=project.extracted_audio_path,
         extracted_audio_duration_seconds=project.extracted_audio_duration_seconds,
+        transcript_path=project.transcript_path,
+        detected_language=project.detected_language,
+        transcription_started_at=project.transcription_started_at,
+        transcription_completed_at=project.transcription_completed_at,
         size_bytes=project.size_bytes,
         activity_log=project.activity_log,
         created_at=project.created_at,
