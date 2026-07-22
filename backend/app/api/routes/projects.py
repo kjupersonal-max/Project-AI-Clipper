@@ -2,6 +2,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from app.models.project import (
+    AnalysisDocument,
+    AnalyzeResponse,
     ExtractAudioResponse,
     InspectResponse,
     ProcessingStatus,
@@ -12,11 +14,22 @@ from app.models.project import (
     utc_now_iso,
 )
 from app.services.project_store import (
+    get_relative_analysis_path,
     get_relative_transcript_path,
     load_project,
     locate_video_file,
     save_project,
     validate_project_id,
+)
+from app.services.analysis.base import ProviderConfigurationError, AnalysisProviderError
+from app.services.timeline_analysis import (
+    AnalysisNotFoundError,
+    AnalysisProcessError,
+    AnalysisTranscriptRequiredError,
+    InvalidTranscriptError,
+    analyze_project_timeline,
+    cleanup_analysis_output,
+    load_project_analysis,
 )
 from app.services.transcription import (
     TranscriptionAudioNotFoundError,
@@ -238,5 +251,108 @@ def transcribe_project(project_id: str) -> TranscribeResponse:
         project.last_error = exc.message
         project.transcription_completed_at = utc_now_iso()
         project.append_log(f"Transcription failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+
+
+@router.get("/{project_id}/analysis", response_model=AnalysisDocument)
+def get_project_analysis(project_id: str) -> AnalysisDocument:
+    validate_project_id(project_id)
+    try:
+        return load_project_analysis(project_id)
+    except AnalysisNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except AnalysisProcessError as exc:
+        raise HTTPException(status_code=500, detail=exc.message) from exc
+
+
+@router.post("/{project_id}/analyze", response_model=AnalyzeResponse)
+def analyze_project(project_id: str) -> AnalyzeResponse:
+    validate_project_id(project_id)
+    project = load_project(project_id)
+
+    project.analysis_status = ProcessingStatus.PROCESSING
+    project.analysis_started_at = utc_now_iso()
+    project.analysis_completed_at = None
+    project.analysis_path = None
+    project.analysis_provider = None
+    project.last_error = None
+    project.append_log("Timeline analysis started.")
+    save_project(project)
+
+    try:
+        document = analyze_project_timeline(project_id)
+        relative_path = get_relative_analysis_path(project_id)
+        project = load_project(project_id)
+        project.analysis_status = ProcessingStatus.COMPLETED
+        project.analysis_path = relative_path
+        project.analysis_provider = document.provider
+        project.analysis_completed_at = utc_now_iso()
+        project.last_error = None
+        project.append_log("Timeline analysis completed.")
+        save_project(project)
+
+        return AnalyzeResponse(
+            project_id=project_id,
+            status="completed",
+            provider=document.provider,
+            model=document.model,
+            is_heuristic_fallback=document.is_heuristic_fallback,
+            segment_count=document.segment_count,
+            clip_candidate_count=document.clip_candidate_count,
+            analysis_path=relative_path,
+        )
+    except HTTPException as exc:
+        cleanup_analysis_output(project_id)
+        project = load_project(project_id)
+        project.analysis_status = ProcessingStatus.FAILED
+        detail = exc.detail if isinstance(exc.detail, str) else "Timeline analysis failed."
+        project.last_error = detail
+        project.analysis_completed_at = utc_now_iso()
+        project.append_log(f"Timeline analysis failed: {detail}", level="error")
+        save_project(project)
+        raise
+    except AnalysisTranscriptRequiredError as exc:
+        project = load_project(project_id)
+        project.analysis_status = ProcessingStatus.FAILED
+        project.last_error = exc.message
+        project.analysis_completed_at = utc_now_iso()
+        project.append_log(f"Timeline analysis failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except InvalidTranscriptError as exc:
+        cleanup_analysis_output(project_id)
+        project = load_project(project_id)
+        project.analysis_status = ProcessingStatus.FAILED
+        project.last_error = exc.message
+        project.analysis_completed_at = utc_now_iso()
+        project.append_log(f"Timeline analysis failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+    except ProviderConfigurationError as exc:
+        cleanup_analysis_output(project_id)
+        project = load_project(project_id)
+        project.analysis_status = ProcessingStatus.FAILED
+        project.last_error = exc.message
+        project.analysis_completed_at = utc_now_iso()
+        project.append_log(f"Timeline analysis failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=503, detail=exc.message) from exc
+    except AnalysisProviderError as exc:
+        cleanup_analysis_output(project_id)
+        project = load_project(project_id)
+        project.analysis_status = ProcessingStatus.FAILED
+        project.last_error = exc.message
+        project.analysis_completed_at = utc_now_iso()
+        project.append_log(f"Timeline analysis failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=503, detail=exc.message) from exc
+    except AnalysisProcessError as exc:
+        cleanup_analysis_output(project_id)
+        project = load_project(project_id)
+        project.analysis_status = ProcessingStatus.FAILED
+        project.last_error = exc.message
+        project.analysis_completed_at = utc_now_iso()
+        project.append_log(f"Timeline analysis failed: {exc.message}", level="error")
         save_project(project)
         raise HTTPException(status_code=422, detail=exc.message) from exc

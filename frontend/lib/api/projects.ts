@@ -43,6 +43,11 @@ export type Project = {
   detected_language: string | null;
   transcription_started_at: string | null;
   transcription_completed_at: string | null;
+  analysis_status: ProcessingStatus;
+  analysis_path: string | null;
+  analysis_started_at: string | null;
+  analysis_completed_at: string | null;
+  analysis_provider: string | null;
   size_bytes: number;
   activity_log: ActivityLogEntry[];
   created_at: string;
@@ -99,6 +104,44 @@ export type TranscribeResponse = {
   segment_count: number;
   word_count: number;
   transcript_path: string;
+};
+
+export type SegmentAnalysis = {
+  segment_id: number;
+  start: number;
+  end: number;
+  text: string;
+  emotion: string;
+  excitement_score: number;
+  humor_score: number;
+  suspense_score: number;
+  educational_score: number;
+  standalone_score: number;
+  context_dependency_score: number;
+  clip_candidate: boolean;
+  reason: string;
+};
+
+export type AnalysisDocument = {
+  project_id: string;
+  provider: string;
+  model: string | null;
+  is_heuristic_fallback: boolean;
+  segment_count: number;
+  clip_candidate_count: number;
+  segments: SegmentAnalysis[];
+  created_at: string;
+};
+
+export type AnalyzeResponse = {
+  project_id: string;
+  status: string;
+  provider: string;
+  model: string | null;
+  is_heuristic_fallback: boolean;
+  segment_count: number;
+  clip_candidate_count: number;
+  analysis_path: string;
 };
 
 export type ApiError = {
@@ -184,6 +227,30 @@ export async function fetchProjectTranscript(
   }
 
   return response.json() as Promise<TranscriptDocument>;
+}
+
+export async function analyzeProject(projectId: string): Promise<AnalyzeResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/analyze`, {
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<AnalyzeResponse>;
+}
+
+export async function fetchProjectAnalysis(projectId: string): Promise<AnalysisDocument> {
+  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/analysis`, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<AnalysisDocument>;
 }
 
 export function getProjectVideoUrl(projectId: string): string {

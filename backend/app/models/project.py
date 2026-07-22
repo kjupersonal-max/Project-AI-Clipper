@@ -56,6 +56,11 @@ class ProjectMetadata(BaseModel):
     detected_language: str | None = None
     transcription_started_at: str | None = None
     transcription_completed_at: str | None = None
+    analysis_status: ProcessingStatus = ProcessingStatus.PENDING
+    analysis_path: str | None = None
+    analysis_started_at: str | None = None
+    analysis_completed_at: str | None = None
+    analysis_provider: str | None = None
     activity_log: list[ActivityLogEntry] = Field(default_factory=list)
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
@@ -86,6 +91,11 @@ class ProjectResponse(BaseModel):
     detected_language: str | None = None
     transcription_started_at: str | None = None
     transcription_completed_at: str | None = None
+    analysis_status: ProcessingStatus
+    analysis_path: str | None = None
+    analysis_started_at: str | None = None
+    analysis_completed_at: str | None = None
+    analysis_provider: str | None = None
     size_bytes: int
     activity_log: list[ActivityLogEntry]
     created_at: str
@@ -144,6 +154,44 @@ class TranscribeResponse(BaseModel):
     transcript_path: str
 
 
+class SegmentAnalysis(BaseModel):
+    segment_id: int
+    start: float
+    end: float
+    text: str
+    emotion: str
+    excitement_score: float = Field(ge=0.0, le=10.0)
+    humor_score: float = Field(ge=0.0, le=10.0)
+    suspense_score: float = Field(ge=0.0, le=10.0)
+    educational_score: float = Field(ge=0.0, le=10.0)
+    standalone_score: float = Field(ge=0.0, le=10.0)
+    context_dependency_score: float = Field(ge=0.0, le=10.0)
+    clip_candidate: bool
+    reason: str
+
+
+class AnalysisDocument(BaseModel):
+    project_id: str
+    provider: str
+    model: str | None = None
+    is_heuristic_fallback: bool = False
+    segment_count: int
+    clip_candidate_count: int
+    segments: list[SegmentAnalysis]
+    created_at: str = Field(default_factory=utc_now_iso)
+
+
+class AnalyzeResponse(BaseModel):
+    project_id: str
+    status: str
+    provider: str
+    model: str | None = None
+    is_heuristic_fallback: bool = False
+    segment_count: int
+    clip_candidate_count: int
+    analysis_path: str
+
+
 class FFmpegAvailability(BaseModel):
     ffmpeg_available: bool
     ffprobe_available: bool
@@ -168,6 +216,11 @@ def project_to_response(project: ProjectMetadata) -> ProjectResponse:
         detected_language=project.detected_language,
         transcription_started_at=project.transcription_started_at,
         transcription_completed_at=project.transcription_completed_at,
+        analysis_status=project.analysis_status,
+        analysis_path=project.analysis_path,
+        analysis_started_at=project.analysis_started_at,
+        analysis_completed_at=project.analysis_completed_at,
+        analysis_provider=project.analysis_provider,
         size_bytes=project.size_bytes,
         activity_log=project.activity_log,
         created_at=project.created_at,

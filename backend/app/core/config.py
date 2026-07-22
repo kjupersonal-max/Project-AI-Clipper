@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     whisper_model_size: str = "base"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
+    analysis_dir: Path = BACKEND_ROOT / "analysis"
+    analysis_output_filename: str = "analysis.json"
+    analysis_provider: str = "auto"
+    analysis_external_provider: str = "openai"
+    analysis_model: str = "gpt-4o-mini"
+    analysis_api_key: str = ""
+    analysis_api_base_url: str | None = None
+    analysis_batch_size: int = 10
 
 
 settings = Settings()

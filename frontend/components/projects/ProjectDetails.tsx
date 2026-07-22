@@ -1,12 +1,15 @@
 "use client";
 
 import {
+  analyzeProject,
   extractProjectAudio,
   fetchProject,
+  fetchProjectAnalysis,
   fetchProjectTranscript,
   getProjectVideoUrl,
   inspectProject,
   transcribeProject,
+  type AnalysisDocument,
   type ApiError,
   type Project,
   type TranscriptDocument,
@@ -15,16 +18,22 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader } from "@/components/ui/Card";
 import {
+  TimelineAnalysisPanel,
+  TimelineAnalysisState,
+} from "@/components/projects/TimelineAnalysisPanel";
+import {
   TranscriptViewer,
   TranscriptViewerState,
 } from "@/components/projects/TranscriptViewer";
 import { cn, formatDuration, formatFileSize } from "@/lib/utils";
+import { defaultAnalysisFilters, type AnalysisFilters } from "@/lib/analysis-filters";
 import {
   AlertCircle,
   AudioLines,
   CheckCircle2,
   Loader2,
   ScanSearch,
+  Sparkles,
   Subtitles,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -65,15 +74,21 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
   const [inspectState, setInspectState] = useState<ActionState>("idle");
   const [extractState, setExtractState] = useState<ActionState>("idle");
   const [transcribeState, setTranscribeState] = useState<ActionState>("idle");
+  const [analyzeState, setAnalyzeState] = useState<ActionState>("idle");
   const [transcript, setTranscript] = useState<TranscriptDocument | null>(null);
+  const [analysis, setAnalysis] = useState<AnalysisDocument | null>(null);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [analysisFilters, setAnalysisFilters] = useState<AnalysisFilters>(defaultAnalysisFilters);
 
   const isActionLoading =
     inspectState === "loading" ||
     extractState === "loading" ||
-    transcribeState === "loading";
+    transcribeState === "loading" ||
+    analyzeState === "loading";
 
   const loadTranscript = useCallback(async () => {
     setTranscriptLoading(true);
@@ -103,6 +118,34 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
     }
   }, [projectId]);
 
+  const loadAnalysis = useCallback(async () => {
+    setAnalysisLoading(true);
+    setAnalysisError(null);
+
+    try {
+      const data = await fetchProjectAnalysis(projectId);
+      setAnalysis(data);
+      return data;
+    } catch (error) {
+      const status =
+        error && typeof error === "object" && "status" in error
+          ? (error as ApiError).status
+          : undefined;
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? String((error as ApiError).message)
+          : "Unable to load timeline analysis.";
+
+      setAnalysis(null);
+      if (status !== 404) {
+        setAnalysisError(message);
+      }
+      return null;
+    } finally {
+      setAnalysisLoading(false);
+    }
+  }, [projectId]);
+
   const applyProjectState = useCallback(
     async (data: Project) => {
       setProject(data);
@@ -112,8 +155,15 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
         setTranscript(null);
         setTranscriptError(null);
       }
+
+      if (data.analysis_status === "completed") {
+        await loadAnalysis();
+      } else {
+        setAnalysis(null);
+        setAnalysisError(null);
+      }
     },
-    [loadTranscript],
+    [loadAnalysis, loadTranscript],
   );
 
   const seekVideoTo = useCallback((seconds: number) => {
@@ -140,6 +190,7 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
       setPageError(message);
       setProject(null);
       setTranscript(null);
+      setAnalysis(null);
       return null;
     }
   }, [applyProjectState, projectId]);
@@ -243,6 +294,29 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
     }
   };
 
+  const handleAnalyze = async () => {
+    setAnalyzeState("loading");
+    setActionError(null);
+    setAnalysisError(null);
+
+    try {
+      await analyzeProject(projectId);
+      setAnalyzeState("success");
+      await refreshProject();
+    } catch (error) {
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? String((error as ApiError).message)
+          : "Timeline analysis failed.";
+      setActionError(message);
+      setAnalyzeState("error");
+      if (message.toLowerCase().includes("provider") || message.toLowerCase().includes("analysis_api_key")) {
+        setAnalysisError(message);
+      }
+      await refreshProject();
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-24 text-sm text-zinc-500">
@@ -286,6 +360,9 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
             </Badge>
             <Badge variant={statusVariant(project.transcription_status)}>
               Transcript: {project.transcription_status}
+            </Badge>
+            <Badge variant={statusVariant(project.analysis_status)}>
+              Analysis: {project.analysis_status}
             </Badge>
           </div>
           <div>
@@ -340,6 +417,20 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
           >
             {transcribeState === "loading" ? "Transcribing..." : "Transcribe"}
           </Button>
+          <Button
+            variant="secondary"
+            onClick={handleAnalyze}
+            disabled={isActionLoading || project.transcription_status !== "completed"}
+            icon={
+              analyzeState === "loading" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Sparkles className="h-4 w-4" />
+              )
+            }
+          >
+            {analyzeState === "loading" ? "Analyzing..." : "Analyze"}
+          </Button>
         </div>
       </div>
 
@@ -354,18 +445,35 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
 
       {(inspectState === "success" ||
         extractState === "success" ||
-        transcribeState === "success") &&
+        transcribeState === "success" ||
+        analyzeState === "success") &&
       !actionError ? (
         <Card>
           <CardContent className="flex items-start gap-3 p-5">
             <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
             <p className="text-sm text-emerald-300">
-              {transcribeState === "success"
-                ? "Transcription completed. Transcript loaded below."
-                : extractState === "success"
-                  ? "Audio extraction completed. Project state refreshed."
-                  : "Video inspection completed. Project state refreshed."}
+              {analyzeState === "success"
+                ? "Timeline analysis completed. Results loaded below."
+                : transcribeState === "success"
+                  ? "Transcription completed. Transcript loaded below."
+                  : extractState === "success"
+                    ? "Audio extraction completed. Project state refreshed."
+                    : "Video inspection completed. Project state refreshed."}
             </p>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {analyzeState === "loading" ? (
+        <Card>
+          <CardContent className="flex items-start gap-3 p-5">
+            <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-amber-300" />
+            <div>
+              <p className="text-sm font-medium text-zinc-200">Timeline analysis in progress</p>
+              <p className="mt-1 text-sm text-zinc-500">
+                Scoring transcript segments in batches for clip candidate selection.
+              </p>
+            </div>
           </CardContent>
         </Card>
       ) : null}
@@ -471,6 +579,12 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
                   {project.transcription_status}
                 </Badge>
               </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-zinc-500">Timeline analysis</span>
+                <Badge variant={statusVariant(project.analysis_status)}>
+                  {project.analysis_status}
+                </Badge>
+              </div>
               {project.extracted_audio_path ? (
                 <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
                   <p className="text-xs uppercase tracking-wider text-zinc-500">
@@ -500,6 +614,19 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
                   ) : null}
                 </div>
               ) : null}
+              {project.analysis_path ? (
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+                  <p className="text-xs uppercase tracking-wider text-zinc-500">Analysis</p>
+                  <p className="mt-1 break-all font-mono text-xs text-zinc-300">
+                    {project.analysis_path}
+                  </p>
+                  {project.analysis_provider ? (
+                    <p className="mt-2 text-xs text-zinc-500">
+                      Provider: {project.analysis_provider}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
               {project.last_error ? (
                 <p className="text-xs text-red-300">Last error: {project.last_error}</p>
               ) : null}
@@ -519,7 +646,13 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
         />
         <CardContent>
           {transcript ? (
-            <TranscriptViewer transcript={transcript} onSeek={seekVideoTo} />
+            <TranscriptViewer
+              transcript={transcript}
+              analysis={analysis}
+              filters={analysisFilters}
+              onFiltersChange={analysis ? setAnalysisFilters : undefined}
+              onSeek={seekVideoTo}
+            />
           ) : (
             <TranscriptViewerState
               loading={transcriptLoading || transcribeState === "loading"}
@@ -533,6 +666,45 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
           project.transcription_status !== "completed" ? (
             <p className="text-sm text-zinc-500">
               No transcript yet. Extract audio, then click Transcribe to generate one.
+            </p>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="Timeline Analysis"
+          description={
+            project.analysis_status === "completed"
+              ? "Segment scoring and clip candidate metadata"
+              : "Analyze the completed transcript to score clip candidates"
+          }
+        />
+        <CardContent>
+          {analysis ? (
+            <TimelineAnalysisPanel
+              analysis={analysis}
+              filters={analysisFilters}
+              onSeek={seekVideoTo}
+            />
+          ) : (
+            <TimelineAnalysisState
+              loading={analysisLoading || analyzeState === "loading"}
+              error={analysisError}
+              unavailableProvider={
+                analyzeState === "error" && analysisError?.toLowerCase().includes("provider")
+                  ? analysisError
+                  : null
+              }
+            />
+          )}
+          {!analysis &&
+          !analysisLoading &&
+          analyzeState !== "loading" &&
+          !analysisError &&
+          project.analysis_status !== "completed" ? (
+            <p className="text-sm text-zinc-500">
+              No timeline analysis yet. Complete transcription, then click Analyze.
             </p>
           ) : null}
         </CardContent>
