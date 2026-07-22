@@ -2,6 +2,7 @@
 
 import {
   analyzeProject,
+  deleteProjectClip,
   exportProjectClip,
   extractProjectAudio,
   fetchProject,
@@ -11,6 +12,7 @@ import {
   fetchProjectTranscript,
   getProjectVideoUrl,
   inspectProject,
+  renameProjectClip,
   selectProjectClips,
   transcribeProject,
   type AnalysisDocument,
@@ -54,9 +56,13 @@ import {
   buildExportKeyFromCandidate,
   buildExportKeyFromSegment,
   buildExportedStateFromClips,
+  clearCandidateExportedState,
   isCandidateExported,
   isCandidateExporting,
   mergeExportedClips,
+  mergeLoadedExports,
+  removeExportedClip,
+  updateExportedClip,
   type CandidateExportState,
 } from "@/lib/clip-export";
 import {
@@ -130,6 +136,13 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
   const [exportedCandidateIds, setExportedCandidateIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const loadExportedClipsRequestIdRef = useRef(0);
+  const pendingDeletedClipIdsRef = useRef<Set<string>>(new Set());
+  const exportStatesRef = useRef(exportStates);
+
+  useEffect(() => {
+    exportStatesRef.current = exportStates;
+  }, [exportStates]);
 
   const isActionLoading =
     inspectState === "loading" ||
@@ -223,24 +236,55 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
   }, [projectId]);
 
   const loadExportedClips = useCallback(async () => {
+    const requestId = ++loadExportedClipsRequestIdRef.current;
     setExportedClipsLoading(true);
     setExportedClipsError(null);
 
     try {
       const data = await fetchProjectClipExports(projectId);
+      if (requestId !== loadExportedClipsRequestIdRef.current) {
+        return data.exports;
+      }
+
       const restored = buildExportedStateFromClips(data.exports);
 
-      setExportedClips((currentClips) => mergeExportedClips(data.exports, currentClips));
-      setExportedCandidateIds(
-        (currentIds) => new Set([...restored.exportedCandidateIds, ...currentIds]),
-      );
-      setExportStates((currentStates) => ({
-        ...restored.exportStates,
-        ...currentStates,
-      }));
+      for (const clipId of pendingDeletedClipIdsRef.current) {
+        if (!data.exports.some((clip) => clip.clip_id === clipId)) {
+          pendingDeletedClipIdsRef.current.delete(clipId);
+        }
+      }
+
+      setExportedClips((currentClips) => {
+        const merged = mergeLoadedExports(data.exports, currentClips);
+        return merged.filter(
+          (clip) => !pendingDeletedClipIdsRef.current.has(clip.clip_id),
+        );
+      });
+      setExportedCandidateIds((currentIds) => {
+        const next = new Set(restored.exportedCandidateIds);
+        for (const candidateId of currentIds) {
+          if (exportStatesRef.current[candidateId]?.status === "exporting") {
+            next.add(candidateId);
+          }
+        }
+        return next;
+      });
+      setExportStates((currentStates) => {
+        const next = { ...restored.exportStates };
+        for (const [candidateId, state] of Object.entries(currentStates)) {
+          if (state.status === "exporting" || state.status === "failed") {
+            next[candidateId] = state;
+          }
+        }
+        return next;
+      });
 
       return data.exports;
     } catch (error) {
+      if (requestId !== loadExportedClipsRequestIdRef.current) {
+        return null;
+      }
+
       const status =
         error && typeof error === "object" && "status" in error
           ? (error as ApiError).status
@@ -257,7 +301,9 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
       );
       return null;
     } finally {
-      setExportedClipsLoading(false);
+      if (requestId === loadExportedClipsRequestIdRef.current) {
+        setExportedClipsLoading(false);
+      }
     }
   }, [projectId]);
 
@@ -354,6 +400,36 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
       );
     },
     [handleExport],
+  );
+
+  const handleRenameExportedClip = useCallback(
+    async (clipId: string, clipName: string) => {
+      const updated = await renameProjectClip(projectId, clipId, { clip_name: clipName });
+      setExportedClips((current) => updateExportedClip(current, updated));
+    },
+    [projectId],
+  );
+
+  const handleDeleteExportedClip = useCallback(
+    async (clipId: string) => {
+      const clipToDelete = exportedClips.find((clip) => clip.clip_id === clipId);
+      await deleteProjectClip(projectId, clipId);
+
+      pendingDeletedClipIdsRef.current.add(clipId);
+      loadExportedClipsRequestIdRef.current += 1;
+      setExportedClips((current) => removeExportedClip(current, clipId));
+
+      if (clipToDelete?.candidate_id) {
+        const cleared = clearCandidateExportedState(
+          clipToDelete.candidate_id,
+          exportedCandidateIds,
+          exportStates,
+        );
+        setExportedCandidateIds(cleared.exportedCandidateIds);
+        setExportStates(cleared.exportStates);
+      }
+    },
+    [exportStates, exportedCandidateIds, exportedClips, projectId],
   );
 
   const loadProject = useCallback(async () => {
@@ -1023,6 +1099,8 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
             exportedClips={exportedClips}
             loading={exportedClipsLoading}
             error={exportedClipsError}
+            onRename={handleRenameExportedClip}
+            onDelete={handleDeleteExportedClip}
           />
         </CardContent>
       </Card>

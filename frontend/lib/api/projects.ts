@@ -223,6 +223,16 @@ export type ClipExportsListResponse = {
   exports: ExportClipResponse[];
 };
 
+export type RenameClipRequest = {
+  clip_name: string;
+};
+
+export type DeleteClipResponse = {
+  project_id: string;
+  clip_id: string;
+  message: string;
+};
+
 export type ApiError = {
   message: string;
   status?: number;
@@ -413,4 +423,45 @@ export async function fetchProjectClipExports(
   }
 
   return response.json() as Promise<ClipExportsListResponse>;
+}
+
+export async function renameProjectClip(
+  projectId: string,
+  clipId: string,
+  request: RenameClipRequest,
+): Promise<ExportClipResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    },
+  );
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<ExportClipResponse>;
+}
+
+export async function deleteProjectClip(
+  projectId: string,
+  clipId: string,
+): Promise<DeleteClipResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}`,
+    {
+      method: "DELETE",
+    },
+  );
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<DeleteClipResponse>;
 }

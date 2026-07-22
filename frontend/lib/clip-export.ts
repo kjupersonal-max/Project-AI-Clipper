@@ -102,6 +102,15 @@ export function mergeExportedClips(
   );
 }
 
+export function mergeLoadedExports(
+  serverExports: ExportClipResponse[],
+  currentClips: ExportClipResponse[],
+): ExportClipResponse[] {
+  const serverIds = new Set(serverExports.map((clip) => clip.clip_id));
+  const sessionOnlyClips = currentClips.filter((clip) => !serverIds.has(clip.clip_id));
+  return mergeExportedClips(serverExports, sessionOnlyClips);
+}
+
 export function buildExportedStateFromClips(exports: ExportClipResponse[]): {
   exportedCandidateIds: Set<string>;
   exportStates: Record<string, CandidateExportState>;
@@ -143,5 +152,39 @@ export function applyLoadedExports(
       ...restored.exportStates,
       ...currentExportStates,
     },
+  };
+}
+
+export function updateExportedClip(
+  clips: ExportClipResponse[],
+  updatedClip: ExportClipResponse,
+): ExportClipResponse[] {
+  return mergeExportedClips(clips, [updatedClip]);
+}
+
+export function removeExportedClip(
+  clips: ExportClipResponse[],
+  clipId: string,
+): ExportClipResponse[] {
+  return clips.filter((clip) => clip.clip_id !== clipId);
+}
+
+export function clearCandidateExportedState(
+  candidateId: string,
+  exportedCandidateIds: ReadonlySet<string>,
+  exportStates: Record<string, CandidateExportState>,
+): {
+  exportedCandidateIds: Set<string>;
+  exportStates: Record<string, CandidateExportState>;
+} {
+  const nextIds = new Set(exportedCandidateIds);
+  nextIds.delete(candidateId);
+
+  const nextStates = { ...exportStates };
+  delete nextStates[candidateId];
+
+  return {
+    exportedCandidateIds: nextIds,
+    exportStates: nextStates,
   };
 }

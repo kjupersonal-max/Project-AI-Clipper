@@ -13,10 +13,13 @@ from app.core.config import settings
 from app.main import app
 from app.models.project import ProcessingStatus, VideoMetadata
 from app.services.clip_export import (
+    ClipExportNotFoundError,
     ClipExportProcessError,
     ClipExportValidationError,
+    delete_project_clip,
     export_project_clip,
     list_project_clip_exports,
+    rename_project_clip,
     sanitize_clip_name,
 )
 from app.services.project_store import load_project, save_project
@@ -440,3 +443,286 @@ def test_list_clip_exports_route_is_registered():
 
     assert "/api/projects/{project_id}/clips/exports" in openapi_paths
     assert "get" in openapi_paths["/api/projects/{project_id}/clips/exports"]
+
+
+def test_rename_clip_success(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    exported = _export_clip(
+        sample_project,
+        start_time=0.0,
+        end_time=1.0,
+        clip_name="Original Name",
+    )
+
+    updated = rename_project_clip(
+        sample_project["project_id"],
+        exported.clip_id,
+        clip_name="Renamed Clip",
+    )
+
+    assert updated.clip_id == exported.clip_id
+    assert updated.clip_name == "Renamed Clip"
+    assert updated.filename == exported.filename
+
+    manifest_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / "exports.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["exports"][0]["clip_name"] == "Renamed Clip"
+
+
+def test_rename_clip_trims_whitespace(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    exported = _export_clip(
+        sample_project,
+        start_time=0.0,
+        end_time=1.0,
+        clip_name="Original",
+    )
+
+    updated = rename_project_clip(
+        sample_project["project_id"],
+        exported.clip_id,
+        clip_name="  Trimmed Name  ",
+    )
+
+    assert updated.clip_name == "Trimmed Name"
+
+
+def test_rename_clip_empty_name_rejected(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    exported = _export_clip(
+        sample_project,
+        start_time=0.0,
+        end_time=1.0,
+        clip_name="Original",
+    )
+
+    with pytest.raises(ClipExportValidationError, match="must not be empty"):
+        rename_project_clip(
+            sample_project["project_id"],
+            exported.clip_id,
+            clip_name="   ",
+        )
+
+
+def test_rename_clip_missing_project(temp_backend_dirs):
+    missing_id = "11111111-1111-4111-8111-111111111111"
+
+    with pytest.raises(Exception) as exc_info:
+        rename_project_clip(missing_id, "clip-id", clip_name="New Name")
+
+    assert exc_info.value.status_code == 404
+
+
+def test_rename_clip_missing_clip(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    _export_clip(sample_project, start_time=0.0, end_time=1.0, clip_name="Original")
+    missing_clip_id = str(uuid.uuid4())
+
+    with pytest.raises(ClipExportNotFoundError, match="was not found"):
+        rename_project_clip(
+            sample_project["project_id"],
+            missing_clip_id,
+            clip_name="New Name",
+        )
+
+
+def test_rename_clip_endpoint(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    exported = _export_clip(
+        sample_project,
+        start_time=0.0,
+        end_time=1.0,
+        clip_name="Original",
+    )
+    client = TestClient(app)
+
+    response = client.patch(
+        f"/api/projects/{sample_project['project_id']}/clips/{exported.clip_id}",
+        json={"clip_name": "Endpoint Rename"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["clip_name"] == "Endpoint Rename"
+    assert body["clip_id"] == exported.clip_id
+    assert body["filename"] == exported.filename
+
+
+def test_delete_clip_success(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    exported = _export_clip(
+        sample_project,
+        start_time=0.0,
+        end_time=1.0,
+        clip_name="To Delete",
+    )
+
+    clip_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / exported.filename
+    )
+    assert clip_path.exists()
+
+    deleted = delete_project_clip(sample_project["project_id"], exported.clip_id)
+
+    assert deleted.clip_id == exported.clip_id
+    assert not clip_path.exists()
+
+    manifest_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / "exports.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["exports"] == []
+
+    exports = list_project_clip_exports(sample_project["project_id"])
+    assert exports == []
+
+
+def test_delete_clip_when_file_already_missing(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    exported = _export_clip(
+        sample_project,
+        start_time=0.0,
+        end_time=1.0,
+        clip_name="Missing File",
+    )
+
+    clip_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / exported.filename
+    )
+    clip_path.unlink()
+
+    delete_project_clip(sample_project["project_id"], exported.clip_id)
+
+    manifest_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / "exports.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["exports"] == []
+
+
+def test_delete_clip_manifest_updated_correctly(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    first = _export_clip(
+        sample_project,
+        start_time=0.0,
+        end_time=1.0,
+        clip_name="Keep Me",
+    )
+    second = _export_clip(
+        sample_project,
+        start_time=1.0,
+        end_time=2.0,
+        clip_name="Delete Me",
+    )
+
+    delete_project_clip(sample_project["project_id"], second.clip_id)
+
+    manifest_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / "exports.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert len(manifest["exports"]) == 1
+    assert manifest["exports"][0]["clip_id"] == first.clip_id
+    assert manifest["exports"][0]["clip_name"] == "Keep Me"
+
+    first_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / first.filename
+    )
+    second_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / second.filename
+    )
+    assert first_path.exists()
+    assert not second_path.exists()
+
+
+def test_delete_clip_unrelated_clips_remain_untouched(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    first = _export_clip(
+        sample_project,
+        start_time=0.0,
+        end_time=1.0,
+        clip_name="First",
+    )
+    second = _export_clip(
+        sample_project,
+        start_time=1.0,
+        end_time=2.0,
+        clip_name="Second",
+    )
+    third = _export_clip(
+        sample_project,
+        start_time=2.0,
+        end_time=3.0,
+        clip_name="Third",
+    )
+
+    delete_project_clip(sample_project["project_id"], second.clip_id)
+
+    exports = list_project_clip_exports(sample_project["project_id"])
+    remaining_ids = {export.clip_id for export in exports}
+    assert remaining_ids == {first.clip_id, third.clip_id}
+
+
+def test_delete_clip_missing_project(temp_backend_dirs):
+    missing_id = "11111111-1111-4111-8111-111111111111"
+
+    with pytest.raises(Exception) as exc_info:
+        delete_project_clip(missing_id, "clip-id")
+
+    assert exc_info.value.status_code == 404
+
+
+def test_delete_clip_missing_clip(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    _export_clip(sample_project, start_time=0.0, end_time=1.0, clip_name="Original")
+    missing_clip_id = str(uuid.uuid4())
+
+    with pytest.raises(ClipExportNotFoundError, match="was not found"):
+        delete_project_clip(sample_project["project_id"], missing_clip_id)
+
+
+def test_delete_clip_endpoint(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    exported = _export_clip(
+        sample_project,
+        start_time=0.0,
+        end_time=1.0,
+        clip_name="Endpoint Delete",
+    )
+    client = TestClient(app)
+
+    response = client.delete(
+        f"/api/projects/{sample_project['project_id']}/clips/{exported.clip_id}",
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["clip_id"] == exported.clip_id
+    assert body["project_id"] == sample_project["project_id"]
+    assert body["message"] == "Exported clip deleted successfully."

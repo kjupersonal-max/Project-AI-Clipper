@@ -5,11 +5,15 @@ import {
   buildExportClipRequestFromSegment,
   buildExportKeyFromSegment,
   buildExportedStateFromClips,
+  clearCandidateExportedState,
   deriveClipName,
   deriveClipNameFromSegment,
   isCandidateExported,
   isCandidateExporting,
   mergeExportedClips,
+  mergeLoadedExports,
+  removeExportedClip,
+  updateExportedClip,
 } from "@/lib/clip-export";
 import type { ExportClipResponse } from "@/lib/api/projects";
 
@@ -183,5 +187,57 @@ describe("buildExportedStateFromClips", () => {
 
     expect(restored.exportedCandidateIds.size).toBe(0);
     expect(restored.exportStates).toEqual({});
+  });
+});
+
+describe("mergeLoadedExports", () => {
+  it("preserves session-only exports not yet returned by the backend", () => {
+    const merged = mergeLoadedExports([savedClip], [sessionClip]);
+    expect(merged.map((clip) => clip.clip_id)).toEqual(["clip-2", "clip-1"]);
+  });
+
+  it("does not reintroduce a clip removed from client state after backend delete", () => {
+    const merged = mergeLoadedExports([sessionClip], [sessionClip]);
+    expect(merged.map((clip) => clip.clip_id)).toEqual(["clip-2"]);
+  });
+});
+
+describe("updateExportedClip", () => {
+  it("replaces an existing clip by clip_id", () => {
+    const updated = {
+      ...savedClip,
+      clip_name: "Renamed clip",
+    };
+
+    expect(updateExportedClip([savedClip, sessionClip], updated)).toEqual([
+      sessionClip,
+      updated,
+    ]);
+  });
+});
+
+describe("removeExportedClip", () => {
+  it("removes a clip from the list", () => {
+    expect(removeExportedClip([savedClip, sessionClip], savedClip.clip_id)).toEqual([
+      sessionClip,
+    ]);
+  });
+});
+
+describe("clearCandidateExportedState", () => {
+  it("clears candidate exported state so it can be exported again", () => {
+    const cleared = clearCandidateExportedState(
+      "candidate-123",
+      new Set(["candidate-123", "candidate-456"]),
+      {
+        "candidate-123": { status: "completed" },
+        "candidate-456": { status: "completed" },
+      },
+    );
+
+    expect(cleared.exportedCandidateIds).toEqual(new Set(["candidate-456"]));
+    expect(cleared.exportStates).toEqual({
+      "candidate-456": { status: "completed" },
+    });
   });
 });

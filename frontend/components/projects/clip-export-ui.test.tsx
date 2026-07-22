@@ -297,4 +297,130 @@ describe("ExportedClipsPanel", () => {
 
     expect(screen.getByText("Unable to load exported clips.")).toBeInTheDocument();
   });
+
+  it("renames a clip successfully", async () => {
+    const user = userEvent.setup();
+    const onRename = vi.fn().mockResolvedValue(undefined);
+
+    const { rerender } = render(
+      <ExportedClipsPanel
+        exportedClips={[exportedClip]}
+        onRename={onRename}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /^rename$/i }));
+    const input = screen.getByLabelText(/rename clip/i);
+    await user.clear(input);
+    await user.type(input, "Updated clip title");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(onRename).toHaveBeenCalledWith("clip-1", "Updated clip title");
+
+    rerender(
+      <ExportedClipsPanel
+        exportedClips={[{ ...exportedClip, clip_name: "Updated clip title" }]}
+        onRename={onRename}
+      />,
+    );
+
+    expect(screen.getByText("Updated clip title")).toBeInTheDocument();
+  });
+
+  it("prevents empty rename submission", async () => {
+    const user = userEvent.setup();
+    const onRename = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <ExportedClipsPanel
+        exportedClips={[exportedClip]}
+        onRename={onRename}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /^rename$/i }));
+    const input = screen.getByLabelText(/rename clip/i);
+    await user.clear(input);
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(onRename).not.toHaveBeenCalled();
+    expect(screen.getByText("Clip name cannot be empty.")).toBeInTheDocument();
+  });
+
+  it("shows rename API error", async () => {
+    const user = userEvent.setup();
+    const onRename = vi.fn().mockRejectedValue({ message: "Unable to rename clip." });
+
+    render(
+      <ExportedClipsPanel
+        exportedClips={[exportedClip]}
+        onRename={onRename}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /^rename$/i }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(await screen.findByText("Unable to rename clip.")).toBeInTheDocument();
+  });
+
+  it("shows delete confirmation with clip name", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ExportedClipsPanel
+        exportedClips={[exportedClip]}
+        onDelete={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /^delete$/i }));
+
+    expect(
+      screen.getByText(/delete "sample clip title"\?/i),
+    ).toBeInTheDocument();
+  });
+
+  it("deletes a clip successfully", async () => {
+    const user = userEvent.setup();
+    const onDelete = vi.fn().mockResolvedValue(undefined);
+
+    const { rerender } = render(
+      <ExportedClipsPanel
+        exportedClips={[exportedClip]}
+        onDelete={onDelete}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /^delete$/i }));
+    await user.click(screen.getByRole("button", { name: /delete clip/i }));
+
+    expect(onDelete).toHaveBeenCalledWith("clip-1");
+
+    rerender(
+      <ExportedClipsPanel
+        exportedClips={[]}
+        onDelete={onDelete}
+      />,
+    );
+
+    expect(screen.getByText(/no exported clips yet/i)).toBeInTheDocument();
+  });
+
+  it("shows delete API error", async () => {
+    const user = userEvent.setup();
+    const onDelete = vi.fn().mockRejectedValue({ message: "Unable to delete clip." });
+
+    render(
+      <ExportedClipsPanel
+        exportedClips={[exportedClip]}
+        onDelete={onDelete}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /^delete$/i }));
+    await user.click(screen.getByRole("button", { name: /delete clip/i }));
+
+    expect(await screen.findByText("Unable to delete clip.")).toBeInTheDocument();
+  });
 });

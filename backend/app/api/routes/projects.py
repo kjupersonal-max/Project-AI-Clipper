@@ -6,12 +6,14 @@ from app.models.project import (
     AnalyzeResponse,
     ClipCandidatesDocument,
     ClipExportsListResponse,
+    DeleteClipResponse,
     ExportClipRequest,
     ExportClipResponse,
     ExtractAudioResponse,
     InspectResponse,
     ProcessingStatus,
     ProjectResponse,
+    RenameClipRequest,
     SelectClipsRequest,
     SelectClipsResponse,
     TranscribeResponse,
@@ -44,9 +46,11 @@ from app.services.clip_export import (
     ClipExportNotFoundError,
     ClipExportProcessError,
     ClipExportValidationError,
+    delete_project_clip,
     export_project_clip,
     list_project_clip_exports,
     locate_exported_clip,
+    rename_project_clip,
 )
 from app.services.timeline_analysis import (
     AnalysisNotFoundError,
@@ -176,6 +180,48 @@ def get_project_clip_exports(project_id: str) -> ClipExportsListResponse:
 
     exports = list_project_clip_exports(project_id)
     return ClipExportsListResponse(project_id=project_id, exports=exports)
+
+
+@router.patch(
+    "/{project_id}/clips/{clip_id}",
+    response_model=ExportClipResponse,
+)
+def rename_project_exported_clip(
+    project_id: str,
+    clip_id: str,
+    request: RenameClipRequest,
+) -> ExportClipResponse:
+    validate_project_id(project_id)
+
+    try:
+        return rename_project_clip(project_id, clip_id, clip_name=request.clip_name)
+    except ClipExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipExportValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+    except ClipExportProcessError as exc:
+        raise HTTPException(status_code=500, detail=exc.message) from exc
+
+
+@router.delete(
+    "/{project_id}/clips/{clip_id}",
+    response_model=DeleteClipResponse,
+)
+def delete_project_exported_clip(project_id: str, clip_id: str) -> DeleteClipResponse:
+    validate_project_id(project_id)
+
+    try:
+        delete_project_clip(project_id, clip_id)
+    except ClipExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipExportProcessError as exc:
+        raise HTTPException(status_code=500, detail=exc.message) from exc
+
+    return DeleteClipResponse(
+        project_id=project_id,
+        clip_id=clip_id,
+        message="Exported clip deleted successfully.",
+    )
 
 
 @router.post("/{project_id}/inspect", response_model=InspectResponse)

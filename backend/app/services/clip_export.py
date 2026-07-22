@@ -370,11 +370,16 @@ def export_project_clip(
     return _record_to_export_response(project_id, record)
 
 
-def locate_exported_clip(project_id: str, clip_id: str) -> tuple[ExportedClipRecord, Path]:
-    document = _load_exports_document(project_id)
+def _find_export_record(document: ClipExportsDocument, clip_id: str) -> ExportedClipRecord:
     record = next((export for export in document.exports if export.clip_id == clip_id), None)
     if record is None:
         raise ClipExportNotFoundError(f"Exported clip '{clip_id}' was not found.")
+    return record
+
+
+def locate_exported_clip(project_id: str, clip_id: str) -> tuple[ExportedClipRecord, Path]:
+    document = _load_exports_document(project_id)
+    record = _find_export_record(document, clip_id)
 
     clips_dir = get_clips_output_dir(project_id)
     clip_path = clips_dir / record.filename
@@ -382,3 +387,35 @@ def locate_exported_clip(project_id: str, clip_id: str) -> tuple[ExportedClipRec
         raise ClipExportNotFoundError(f"Exported clip file for '{clip_id}' was not found.")
 
     return record, clip_path
+
+
+def rename_project_clip(project_id: str, clip_id: str, *, clip_name: str) -> ExportClipResponse:
+    load_project(project_id)
+
+    trimmed_name = clip_name.strip()
+    if not trimmed_name:
+        raise ClipExportValidationError("clip_name must not be empty.")
+
+    document = _load_exports_document(project_id)
+    record = _find_export_record(document, clip_id)
+    record.clip_name = trimmed_name
+    _write_exports_document(document)
+
+    return _record_to_export_response(project_id, record)
+
+
+def delete_project_clip(project_id: str, clip_id: str) -> ExportedClipRecord:
+    load_project(project_id)
+
+    document = _load_exports_document(project_id)
+    record = _find_export_record(document, clip_id)
+
+    clips_dir = get_clips_output_dir(project_id)
+    clip_path = clips_dir / record.filename
+    if clip_path.exists() and clip_path.is_file():
+        clip_path.unlink()
+
+    document.exports = [export for export in document.exports if export.clip_id != clip_id]
+    _write_exports_document(document)
+
+    return record

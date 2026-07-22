@@ -3,6 +3,7 @@ import type { ExportClipResponse } from "@/lib/api/projects";
 import {
   buildExportedStateFromClips,
   mergeExportedClips,
+  mergeLoadedExports,
 } from "@/lib/clip-export";
 
 const savedClip: ExportClipResponse = {
@@ -39,8 +40,35 @@ describe("exported clips reload flow", () => {
   });
 
   it("preserves a new session export when backend data reloads", () => {
-    const merged = mergeExportedClips([savedClip], [sessionClip]);
+    const merged = mergeLoadedExports([savedClip], [sessionClip]);
     expect(merged.map((clip) => clip.clip_id)).toEqual(["clip-session", "clip-saved"]);
+  });
+
+  it("does not resurrect a deleted clip when backend no longer returns it", () => {
+    const remaining = sessionClip;
+    const serverAfterDelete = [remaining];
+    const clientAfterDelete = [remaining];
+
+    expect(mergeLoadedExports(serverAfterDelete, clientAfterDelete).map((clip) => clip.clip_id)).toEqual([
+      remaining.clip_id,
+    ]);
+  });
+
+  it("regression: mergeExportedClips resurrects a deleted clip from stale backend data", () => {
+    const clientAfterDelete = [sessionClip];
+    const staleServerIncludingDeleted = [savedClip, sessionClip];
+
+    const resurrected = mergeExportedClips(staleServerIncludingDeleted, clientAfterDelete);
+    expect(resurrected.map((clip) => clip.clip_id)).toContain(savedClip.clip_id);
+  });
+
+  it("regression: mergeLoadedExports keeps deleted clip out when backend no longer returns it", () => {
+    const clientAfterDelete = [sessionClip];
+    const serverAfterDelete = [sessionClip];
+
+    expect(mergeLoadedExports(serverAfterDelete, clientAfterDelete).map((clip) => clip.clip_id)).toEqual([
+      sessionClip.clip_id,
+    ]);
   });
 
   it("restores exported candidate button state from candidate_id", () => {

@@ -269,6 +269,16 @@ class ExportClipRequest(BaseModel):
     candidate_id: str | None = None
 
 
+class RenameClipRequest(BaseModel):
+    clip_name: str
+
+
+class DeleteClipResponse(BaseModel):
+    project_id: str
+    clip_id: str
+    message: str
+
+
 class ExportClipResponse(BaseModel):
     clip_id: str
     project_id: str

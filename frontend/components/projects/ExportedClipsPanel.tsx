@@ -1,13 +1,33 @@
+"use client";
+
+import { useState } from "react";
 import type { ExportClipResponse } from "@/lib/api/projects";
 import { resolveMediaUrl } from "@/lib/api/projects";
 import { Badge } from "@/components/ui/Badge";
 import { cn, formatDuration, formatFileSize } from "@/lib/utils";
-import { CheckCircle2, Clock3, Download, Film, Loader2, Video } from "lucide-react";
+import {
+  CheckCircle2,
+  Clock3,
+  Download,
+  Film,
+  Loader2,
+  Pencil,
+  Trash2,
+  Video,
+} from "lucide-react";
+
+type ClipActionState = {
+  renaming?: boolean;
+  deleting?: boolean;
+  error?: string | null;
+};
 
 type ExportedClipsPanelProps = {
   exportedClips: ExportClipResponse[];
   loading?: boolean;
   error?: string | null;
+  onRename?: (clipId: string, clipName: string) => Promise<void>;
+  onDelete?: (clipId: string) => Promise<void>;
 };
 
 function formatTimestamp(seconds: number): string {
@@ -32,9 +52,81 @@ function statusVariant(
   }
 }
 
-function ExportedClipCard({ clip }: { clip: ExportClipResponse }) {
+function getClipDisplayName(clip: ExportClipResponse): string {
+  return clip.clip_name?.trim() || clip.filename;
+}
+
+function getRenameDefaultValue(clip: ExportClipResponse): string {
+  const trimmedName = clip.clip_name?.trim();
+  if (trimmedName) {
+    return trimmedName;
+  }
+
+  return clip.filename.replace(/\.mp4$/i, "");
+}
+
+type ExportedClipCardProps = {
+  clip: ExportClipResponse;
+  actionState?: ClipActionState;
+  onRename?: (clipId: string, clipName: string) => Promise<void>;
+  onDelete?: (clipId: string) => Promise<void>;
+};
+
+function ExportedClipCard({
+  clip,
+  actionState,
+  onRename,
+  onDelete,
+}: ExportedClipCardProps) {
   const mediaUrl = resolveMediaUrl(clip.media_url);
-  const displayName = clip.clip_name?.trim() || clip.filename;
+  const displayName = getClipDisplayName(clip);
+  const [isEditing, setIsEditing] = useState(false);
+  const [renameValue, setRenameValue] = useState(getRenameDefaultValue(clip));
+  const [renameValidationError, setRenameValidationError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const isRenaming = actionState?.renaming ?? false;
+  const isDeleting = actionState?.deleting ?? false;
+  const actionError = actionState?.error ?? null;
+  const isBusy = isRenaming || isDeleting;
+
+  function startRename() {
+    setRenameValue(getRenameDefaultValue(clip));
+    setRenameValidationError(null);
+    setIsEditing(true);
+    setConfirmDelete(false);
+  }
+
+  function cancelRename() {
+    setIsEditing(false);
+    setRenameValue(getRenameDefaultValue(clip));
+    setRenameValidationError(null);
+  }
+
+  async function submitRename() {
+    const trimmed = renameValue.trim();
+    if (!trimmed) {
+      setRenameValidationError("Clip name cannot be empty.");
+      return;
+    }
+
+    if (!onRename) {
+      return;
+    }
+
+    setRenameValidationError(null);
+    await onRename(clip.clip_id, trimmed);
+    setIsEditing(false);
+  }
+
+  async function confirmDeleteClip() {
+    if (!onDelete) {
+      return;
+    }
+
+    await onDelete(clip.clip_id);
+    setConfirmDelete(false);
+  }
 
   return (
     <div className="overflow-hidden rounded-lg border border-emerald-500/30 bg-zinc-950/50 ring-1 ring-emerald-500/10">
@@ -44,10 +136,73 @@ function ExportedClipCard({ clip }: { clip: ExportClipResponse }) {
           <Badge variant={statusVariant(clip.export_status)}>{clip.export_status}</Badge>
         </div>
 
-        <div>
-          <p className="text-sm font-medium text-zinc-100">{displayName}</p>
-          <p className="mt-1 font-mono text-xs text-zinc-500">{clip.filename}</p>
-        </div>
+        {isEditing ? (
+          <div className="space-y-2">
+            <label className="block text-xs font-medium text-zinc-400" htmlFor={`rename-${clip.clip_id}`}>
+              Rename clip
+            </label>
+            <input
+              id={`rename-${clip.clip_id}`}
+              type="text"
+              value={renameValue}
+              onChange={(event) => {
+                setRenameValue(event.target.value);
+                if (renameValidationError) {
+                  setRenameValidationError(null);
+                }
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void submitRename();
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  cancelRename();
+                }
+              }}
+              disabled={isRenaming}
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500/30 focus:border-emerald-500/50 focus:ring-2"
+              autoFocus
+            />
+            {renameValidationError ? (
+              <p className="text-xs text-red-300">{renameValidationError}</p>
+            ) : null}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void submitRename()}
+                disabled={isRenaming}
+                className={cn(
+                  "inline-flex h-8 items-center justify-center rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 text-xs font-medium text-emerald-100 transition-colors hover:bg-emerald-500/20",
+                  isRenaming && "cursor-not-allowed opacity-60",
+                )}
+              >
+                {isRenaming ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  "Save"
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={cancelRename}
+                disabled={isRenaming}
+                className="inline-flex h-8 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <p className="text-sm font-medium text-zinc-100">{displayName}</p>
+            <p className="mt-1 font-mono text-xs text-zinc-500">{clip.filename}</p>
+          </div>
+        )}
 
         <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-500">
           <span className="inline-flex items-center gap-1 font-mono text-emerald-300">
@@ -69,22 +224,97 @@ function ExportedClipCard({ clip }: { clip: ExportClipResponse }) {
             Your browser does not support HTML5 video playback.
           </video>
         </div>
+
+        {actionError ? (
+          <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-300">
+            {actionError}
+          </div>
+        ) : null}
+
+        {confirmDelete ? (
+          <div className="rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-3">
+            <p className="text-sm text-red-100">
+              Delete &quot;{displayName}&quot;? This removes the exported MP4 and cannot be undone.
+            </p>
+            <div className="mt-3 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void confirmDeleteClip()}
+                disabled={isDeleting}
+                className={cn(
+                  "inline-flex h-8 items-center justify-center rounded-lg border border-red-500/40 bg-red-500/10 px-3 text-xs font-medium text-red-100 transition-colors hover:bg-red-500/20",
+                  isDeleting && "cursor-not-allowed opacity-60",
+                )}
+              >
+                {isDeleting ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  "Delete clip"
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(false)}
+                disabled={isDeleting}
+                className="inline-flex h-8 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
-      <div className="flex items-center justify-between gap-3 border-t border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
         <p className="text-xs text-emerald-100/80">
           Rendered MP4 ready for download or preview.
         </p>
-        <a
-          href={mediaUrl}
-          download={clip.filename}
-          className={cn(
-            "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-800",
-          )}
-        >
-          <Download className="h-3.5 w-3.5" />
-          Download
-        </a>
+        <div className="flex flex-wrap items-center gap-2">
+          {onRename ? (
+            <button
+              type="button"
+              onClick={startRename}
+              disabled={isBusy || isEditing}
+              className={cn(
+                "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-800",
+                (isBusy || isEditing) && "cursor-not-allowed opacity-60",
+              )}
+            >
+              <Pencil className="h-3.5 w-3.5" />
+              Rename
+            </button>
+          ) : null}
+          {onDelete ? (
+            <button
+              type="button"
+              onClick={() => {
+                setConfirmDelete(true);
+                setIsEditing(false);
+              }}
+              disabled={isBusy || confirmDelete}
+              className={cn(
+                "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-red-500/30 bg-red-500/5 px-3 text-xs font-medium text-red-200 transition-colors hover:bg-red-500/10",
+                (isBusy || confirmDelete) && "cursor-not-allowed opacity-60",
+              )}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete
+            </button>
+          ) : null}
+          <a
+            href={mediaUrl}
+            download={clip.filename}
+            className={cn(
+              "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-800",
+            )}
+          >
+            <Download className="h-3.5 w-3.5" />
+            Download
+          </a>
+        </div>
       </div>
     </div>
   );
@@ -121,7 +351,74 @@ export function ExportedClipsPanel({
   exportedClips,
   loading = false,
   error = null,
+  onRename,
+  onDelete,
 }: ExportedClipsPanelProps) {
+  const [clipActions, setClipActions] = useState<Record<string, ClipActionState>>({});
+
+  async function handleRename(clipId: string, clipName: string) {
+    if (!onRename) {
+      return;
+    }
+
+    setClipActions((current) => ({
+      ...current,
+      [clipId]: { ...current[clipId], renaming: true, error: null },
+    }));
+
+    try {
+      await onRename(clipId, clipName);
+      setClipActions((current) => ({
+        ...current,
+        [clipId]: { ...current[clipId], renaming: false, error: null },
+      }));
+    } catch (renameError) {
+      const message =
+        renameError &&
+        typeof renameError === "object" &&
+        "message" in renameError
+          ? String((renameError as { message: string }).message)
+          : "Unable to rename clip.";
+
+      setClipActions((current) => ({
+        ...current,
+        [clipId]: { renaming: false, error: message },
+      }));
+    }
+  }
+
+  async function handleDelete(clipId: string) {
+    if (!onDelete) {
+      return;
+    }
+
+    setClipActions((current) => ({
+      ...current,
+      [clipId]: { ...current[clipId], deleting: true, error: null },
+    }));
+
+    try {
+      await onDelete(clipId);
+      setClipActions((current) => {
+        const next = { ...current };
+        delete next[clipId];
+        return next;
+      });
+    } catch (deleteError) {
+      const message =
+        deleteError &&
+        typeof deleteError === "object" &&
+        "message" in deleteError
+          ? String((deleteError as { message: string }).message)
+          : "Unable to delete clip.";
+
+      setClipActions((current) => ({
+        ...current,
+        [clipId]: { deleting: false, error: message },
+      }));
+    }
+  }
+
   if (loading || error) {
     return <ExportedClipsState loading={loading} error={error} />;
   }
@@ -153,7 +450,13 @@ export function ExportedClipsPanel({
 
       <div className="space-y-3">
         {exportedClips.map((clip) => (
-          <ExportedClipCard key={clip.clip_id} clip={clip} />
+          <ExportedClipCard
+            key={clip.clip_id}
+            clip={clip}
+            actionState={clipActions[clip.clip_id]}
+            onRename={onRename ? handleRename : undefined}
+            onDelete={onDelete ? handleDelete : undefined}
+          />
         ))}
       </div>
     </div>
