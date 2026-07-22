@@ -4,6 +4,7 @@ import {
   analyzeProject,
   deleteProjectClip,
   exportProjectClip,
+  favoriteProjectClip,
   extractProjectAudio,
   fetchProject,
   fetchProjectAnalysis,
@@ -405,6 +406,14 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
   const handleRenameExportedClip = useCallback(
     async (clipId: string, clipName: string) => {
       const updated = await renameProjectClip(projectId, clipId, { clip_name: clipName });
+      setExportedClips((current) => updateExportedClip(current, updated));
+    },
+    [projectId],
+  );
+
+  const handleFavoriteExportedClip = useCallback(
+    async (clipId: string, isFavorite: boolean) => {
+      const updated = await favoriteProjectClip(projectId, clipId, { is_favorite: isFavorite });
       setExportedClips((current) => updateExportedClip(current, updated));
     },
     [projectId],
@@ -1101,6 +1110,7 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
             error={exportedClipsError}
             onRename={handleRenameExportedClip}
             onDelete={handleDeleteExportedClip}
+            onFavorite={handleFavoriteExportedClip}
           />
         </CardContent>
       </Card>

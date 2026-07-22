@@ -151,6 +151,7 @@ const savedClip: ExportClipResponse = {
   clip_name: "Saved clip",
   created_at: "2026-07-22T10:00:00Z",
   export_status: "completed",
+  is_favorite: false,
 };
 
 const sessionClip: ExportClipResponse = {

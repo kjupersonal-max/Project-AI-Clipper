@@ -273,6 +273,10 @@ class RenameClipRequest(BaseModel):
     clip_name: str
 
 
+class FavoriteClipRequest(BaseModel):
+    is_favorite: bool
+
+
 class DeleteClipResponse(BaseModel):
     project_id: str
     clip_id: str
@@ -293,6 +297,7 @@ class ExportClipResponse(BaseModel):
     clip_name: str | None = None
     created_at: str
     export_status: ProcessingStatus
+    is_favorite: bool = False
 
 
 class ExportedClipRecord(BaseModel):
@@ -308,6 +313,7 @@ class ExportedClipRecord(BaseModel):
     clip_name: str | None = None
     created_at: str = Field(default_factory=utc_now_iso)
     export_status: ProcessingStatus = ProcessingStatus.COMPLETED
+    is_favorite: bool = False
 
 
 class ClipExportsDocument(BaseModel):

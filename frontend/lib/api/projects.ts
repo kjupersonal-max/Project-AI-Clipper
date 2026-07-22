@@ -216,6 +216,7 @@ export type ExportClipResponse = {
   clip_name: string | null;
   created_at: string;
   export_status: ProcessingStatus;
+  is_favorite: boolean;
 };
 
 export type ClipExportsListResponse = {
@@ -225,6 +226,10 @@ export type ClipExportsListResponse = {
 
 export type RenameClipRequest = {
   clip_name: string;
+};
+
+export type FavoriteClipRequest = {
+  is_favorite: boolean;
 };
 
 export type DeleteClipResponse = {
@@ -432,6 +437,29 @@ export async function renameProjectClip(
 ): Promise<ExportClipResponse> {
   const response = await fetch(
     `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    },
+  );
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<ExportClipResponse>;
+}
+
+export async function favoriteProjectClip(
+  projectId: string,
+  clipId: string,
+  request: FavoriteClipRequest,
+): Promise<ExportClipResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/favorite`,
     {
       method: "PATCH",
       headers: {

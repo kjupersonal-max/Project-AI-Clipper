@@ -9,6 +9,7 @@ from app.models.project import (
     DeleteClipResponse,
     ExportClipRequest,
     ExportClipResponse,
+    FavoriteClipRequest,
     ExtractAudioResponse,
     InspectResponse,
     ProcessingStatus,
@@ -48,6 +49,7 @@ from app.services.clip_export import (
     ClipExportValidationError,
     delete_project_clip,
     export_project_clip,
+    favorite_project_clip,
     list_project_clip_exports,
     locate_exported_clip,
     rename_project_clip,
@@ -199,6 +201,25 @@ def rename_project_exported_clip(
         raise HTTPException(status_code=404, detail=exc.message) from exc
     except ClipExportValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.message) from exc
+    except ClipExportProcessError as exc:
+        raise HTTPException(status_code=500, detail=exc.message) from exc
+
+
+@router.patch(
+    "/{project_id}/clips/{clip_id}/favorite",
+    response_model=ExportClipResponse,
+)
+def favorite_project_exported_clip(
+    project_id: str,
+    clip_id: str,
+    request: FavoriteClipRequest,
+) -> ExportClipResponse:
+    validate_project_id(project_id)
+
+    try:
+        return favorite_project_clip(project_id, clip_id, is_favorite=request.is_favorite)
+    except ClipExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
     except ClipExportProcessError as exc:
         raise HTTPException(status_code=500, detail=exc.message) from exc
 

@@ -59,6 +59,7 @@ const exportedClip: ExportClipResponse = {
   clip_name: "Sample clip title",
   created_at: "2026-07-22T18:05:00Z",
   export_status: "completed",
+  is_favorite: false,
 };
 
 const segment: SegmentAnalysis = {
@@ -254,8 +255,12 @@ describe("ExportedClipsPanel", () => {
 
     expect(screen.getAllByText("Sample clip title").length).toBeGreaterThan(0);
     expect(screen.getByText("sample-clip-title.mp4")).toBeInTheDocument();
-    expect(screen.getByText(/duration: 15s/i)).toBeInTheDocument();
-    expect(screen.getByText(/size: 2.0 mb/i)).toBeInTheDocument();
+    expect(screen.getByText("Duration")).toBeInTheDocument();
+    expect(screen.getByText("15s")).toBeInTheDocument();
+    expect(screen.getByText("File size")).toBeInTheDocument();
+    expect(screen.getByText("2.0 MB")).toBeInTheDocument();
+    expect(screen.getByText("Candidate source")).toBeInTheDocument();
+    expect(screen.getByText("candidate-123")).toBeInTheDocument();
     expect(screen.getByText("completed")).toBeInTheDocument();
 
     const video = container.querySelector("video");
@@ -422,5 +427,346 @@ describe("ExportedClipsPanel", () => {
     await user.click(screen.getByRole("button", { name: /delete clip/i }));
 
     expect(await screen.findByText("Unable to delete clip.")).toBeInTheDocument();
+  });
+
+  it("favorites a clip successfully", async () => {
+    const user = userEvent.setup();
+    const onFavorite = vi.fn().mockResolvedValue(undefined);
+
+    const { rerender } = render(
+      <ExportedClipsPanel
+        exportedClips={[exportedClip]}
+        onFavorite={onFavorite}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /add to favorites/i }));
+
+    expect(onFavorite).toHaveBeenCalledWith("clip-1", true);
+
+    rerender(
+      <ExportedClipsPanel
+        exportedClips={[{ ...exportedClip, is_favorite: true }]}
+        onFavorite={onFavorite}
+      />,
+    );
+
+    expect(screen.getByText("Favorite")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /remove from favorites/i })).toBeInTheDocument();
+  });
+
+  it("shows favorite API error", async () => {
+    const user = userEvent.setup();
+    const onFavorite = vi.fn().mockRejectedValue({ message: "Unable to update favorite." });
+
+    render(
+      <ExportedClipsPanel
+        exportedClips={[exportedClip]}
+        onFavorite={onFavorite}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /add to favorites/i }));
+
+    expect(await screen.findByText("Unable to update favorite.")).toBeInTheDocument();
+  });
+
+  it("shows favorite state from loaded data", () => {
+    render(
+      <ExportedClipsPanel
+        exportedClips={[{ ...exportedClip, is_favorite: true }]}
+        onFavorite={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Favorite")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /remove from favorites/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("searches by clip name", async () => {
+    const user = userEvent.setup();
+    const otherClip: ExportClipResponse = {
+      ...exportedClip,
+      clip_id: "clip-2",
+      clip_name: "Another clip",
+      filename: "another-clip.mp4",
+    };
+
+    render(<ExportedClipsPanel exportedClips={[exportedClip, otherClip]} />);
+
+    await user.type(screen.getByRole("searchbox", { name: /search exported clips/i }), "sample");
+
+    expect(screen.getByText("Sample clip title")).toBeInTheDocument();
+    expect(screen.queryByText("Another clip")).not.toBeInTheDocument();
+  });
+
+  it("searches by filename", async () => {
+    const user = userEvent.setup();
+    const otherClip: ExportClipResponse = {
+      ...exportedClip,
+      clip_id: "clip-2",
+      clip_name: "Another clip",
+      filename: "another-clip.mp4",
+    };
+
+    render(<ExportedClipsPanel exportedClips={[exportedClip, otherClip]} />);
+
+    await user.type(
+      screen.getByRole("searchbox", { name: /search exported clips/i }),
+      "another-clip",
+    );
+
+    expect(screen.getByText("Another clip")).toBeInTheDocument();
+    expect(screen.queryByText("Sample clip title")).not.toBeInTheDocument();
+  });
+
+  it("shows no-results state when search has no matches", async () => {
+    const user = userEvent.setup();
+
+    render(<ExportedClipsPanel exportedClips={[exportedClip]} />);
+
+    await user.type(
+      screen.getByRole("searchbox", { name: /search exported clips/i }),
+      "missing clip",
+    );
+
+    expect(screen.getByText(/no matching clips/i)).toBeInTheDocument();
+    expect(screen.getByText(/missing clip/i)).toBeInTheDocument();
+  });
+
+  it("clears no-results state when search is cleared", async () => {
+    const user = userEvent.setup();
+
+    render(<ExportedClipsPanel exportedClips={[exportedClip]} />);
+
+    const searchInput = screen.getByRole("searchbox", { name: /search exported clips/i });
+    await user.type(searchInput, "missing clip");
+    expect(screen.getByText(/no matching clips/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /clear search/i }));
+    expect(screen.queryByText(/no matching clips/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Sample clip title")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["Newest first", ["New Clip", "Old Clip"]],
+    ["Oldest first", ["Old Clip", "New Clip"]],
+    ["Name A–Z", ["Alpha Clip", "Beta Clip"]],
+    ["Name Z–A", ["Beta Clip", "Alpha Clip"]],
+    ["Shortest duration", ["Short Clip", "Long Clip"]],
+    ["Longest duration", ["Long Clip", "Short Clip"]],
+    ["Favorites first", ["Favorite Clip", "Plain Clip"]],
+  ] as const)("sorts clips by %s", async (label, expectedOrder) => {
+    const user = userEvent.setup();
+    const clips: ExportClipResponse[] = [
+      {
+        ...exportedClip,
+        clip_id: "clip-old",
+        clip_name: "Old Clip",
+        filename: "old.mp4",
+        created_at: "2026-07-22T08:00:00Z",
+        duration: 20,
+        is_favorite: false,
+      },
+      {
+        ...exportedClip,
+        clip_id: "clip-new",
+        clip_name: "New Clip",
+        filename: "new.mp4",
+        created_at: "2026-07-22T12:00:00Z",
+        duration: 20,
+        is_favorite: false,
+      },
+      {
+        ...exportedClip,
+        clip_id: "clip-alpha",
+        clip_name: "Alpha Clip",
+        filename: "alpha.mp4",
+        created_at: "2026-07-22T10:00:00Z",
+        duration: 15,
+        is_favorite: false,
+      },
+      {
+        ...exportedClip,
+        clip_id: "clip-beta",
+        clip_name: "Beta Clip",
+        filename: "beta.mp4",
+        created_at: "2026-07-22T11:00:00Z",
+        duration: 15,
+        is_favorite: false,
+      },
+      {
+        ...exportedClip,
+        clip_id: "clip-short",
+        clip_name: "Short Clip",
+        filename: "short.mp4",
+        created_at: "2026-07-22T09:00:00Z",
+        duration: 5,
+        is_favorite: false,
+      },
+      {
+        ...exportedClip,
+        clip_id: "clip-long",
+        clip_name: "Long Clip",
+        filename: "long.mp4",
+        created_at: "2026-07-22T09:30:00Z",
+        duration: 30,
+        is_favorite: false,
+      },
+      {
+        ...exportedClip,
+        clip_id: "clip-fav",
+        clip_name: "Favorite Clip",
+        filename: "favorite.mp4",
+        created_at: "2026-07-22T07:00:00Z",
+        duration: 12,
+        is_favorite: true,
+      },
+      {
+        ...exportedClip,
+        clip_id: "clip-plain",
+        clip_name: "Plain Clip",
+        filename: "plain.mp4",
+        created_at: "2026-07-22T13:00:00Z",
+        duration: 12,
+        is_favorite: false,
+      },
+    ];
+
+    render(<ExportedClipsPanel exportedClips={clips} />);
+
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /sort exported clips/i }),
+      label,
+    );
+
+    const renderedNames = screen
+      .getAllByText(/Clip$/)
+      .map((node) => node.textContent?.trim())
+      .filter((name): name is string => Boolean(name));
+
+    const firstIndex = renderedNames.indexOf(expectedOrder[0]);
+    const secondIndex = renderedNames.indexOf(expectedOrder[1]);
+    expect(firstIndex).toBeGreaterThanOrEqual(0);
+    expect(secondIndex).toBeGreaterThan(firstIndex);
+  });
+
+  it("applies search and sort together", async () => {
+    const user = userEvent.setup();
+    const clips: ExportClipResponse[] = [
+      {
+        ...exportedClip,
+        clip_id: "clip-a",
+        clip_name: "Alpha Search",
+        filename: "alpha-search.mp4",
+        created_at: "2026-07-22T10:00:00Z",
+        is_favorite: false,
+      },
+      {
+        ...exportedClip,
+        clip_id: "clip-b",
+        clip_name: "Beta Search",
+        filename: "beta-search.mp4",
+        created_at: "2026-07-22T12:00:00Z",
+        is_favorite: true,
+      },
+      {
+        ...exportedClip,
+        clip_id: "clip-c",
+        clip_name: "Other Clip",
+        filename: "other.mp4",
+        created_at: "2026-07-22T11:00:00Z",
+        is_favorite: false,
+      },
+    ];
+
+    render(<ExportedClipsPanel exportedClips={clips} />);
+
+    await user.type(screen.getByRole("searchbox", { name: /search exported clips/i }), "search");
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /sort exported clips/i }),
+      "Name A–Z",
+    );
+
+    const visibleTitles = screen.getAllByText(/search$/i).map((node) => node.textContent);
+    expect(visibleTitles[0]).toContain("Alpha Search");
+    expect(visibleTitles[1]).toContain("Beta Search");
+    expect(screen.queryByText("Other Clip")).not.toBeInTheDocument();
+  });
+
+  it("updates filtered view after rename", async () => {
+    const user = userEvent.setup();
+    const onRename = vi.fn().mockResolvedValue(undefined);
+    const clip: ExportClipResponse = {
+      ...exportedClip,
+      clip_id: "clip-rename",
+      clip_name: "Before Rename",
+      filename: "before-rename.mp4",
+    };
+
+    const { rerender } = render(
+      <ExportedClipsPanel exportedClips={[clip]} onRename={onRename} />,
+    );
+
+    await user.type(screen.getByRole("searchbox", { name: /search exported clips/i }), "before");
+    expect(screen.getByText("Before Rename")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^rename$/i }));
+    const input = screen.getByLabelText(/rename clip/i);
+    await user.clear(input);
+    await user.type(input, "After Rename");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    rerender(
+      <ExportedClipsPanel
+        exportedClips={[{ ...clip, clip_name: "After Rename" }]}
+        onRename={onRename}
+      />,
+    );
+
+    await user.clear(screen.getByRole("searchbox", { name: /search exported clips/i }));
+    await user.type(screen.getByRole("searchbox", { name: /search exported clips/i }), "after");
+
+    expect(screen.getByText("After Rename")).toBeInTheDocument();
+  });
+
+  it("updates sorted view after delete", async () => {
+    const user = userEvent.setup();
+    const onDelete = vi.fn().mockResolvedValue(undefined);
+    const first: ExportClipResponse = {
+      ...exportedClip,
+      clip_id: "clip-first",
+      clip_name: "First Clip",
+      filename: "first.mp4",
+      created_at: "2026-07-22T10:00:00Z",
+    };
+    const second: ExportClipResponse = {
+      ...exportedClip,
+      clip_id: "clip-second",
+      clip_name: "Second Clip",
+      filename: "second.mp4",
+      created_at: "2026-07-22T12:00:00Z",
+    };
+
+    const { rerender } = render(
+      <ExportedClipsPanel exportedClips={[first, second]} onDelete={onDelete} />,
+    );
+
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /sort exported clips/i }),
+      "Newest first",
+    );
+    expect(screen.getByText("Second Clip")).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: /^delete$/i })[0]);
+    await user.click(screen.getByRole("button", { name: /delete clip/i }));
+
+    rerender(<ExportedClipsPanel exportedClips={[first]} onDelete={onDelete} />);
+
+    expect(screen.getByText("First Clip")).toBeInTheDocument();
+    expect(screen.queryByText("Second Clip")).not.toBeInTheDocument();
   });
 });

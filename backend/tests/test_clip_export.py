@@ -18,6 +18,7 @@ from app.services.clip_export import (
     ClipExportValidationError,
     delete_project_clip,
     export_project_clip,
+    favorite_project_clip,
     list_project_clip_exports,
     rename_project_clip,
     sanitize_clip_name,
@@ -726,3 +727,195 @@ def test_delete_clip_endpoint(sample_project, temp_backend_dirs):
     assert body["clip_id"] == exported.clip_id
     assert body["project_id"] == sample_project["project_id"]
     assert body["message"] == "Exported clip deleted successfully."
+
+
+def test_favorite_clip_true(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    exported = _export_clip(
+        sample_project,
+        start_time=0.0,
+        end_time=1.0,
+        clip_name="Favorite Me",
+    )
+
+    updated = favorite_project_clip(
+        sample_project["project_id"],
+        exported.clip_id,
+        is_favorite=True,
+    )
+
+    assert updated.clip_id == exported.clip_id
+    assert updated.is_favorite is True
+
+    manifest_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / "exports.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["exports"][0]["is_favorite"] is True
+
+
+def test_favorite_clip_false(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    exported = _export_clip(
+        sample_project,
+        start_time=0.0,
+        end_time=1.0,
+        clip_name="Unfavorite Me",
+    )
+
+    favorite_project_clip(
+        sample_project["project_id"],
+        exported.clip_id,
+        is_favorite=True,
+    )
+    updated = favorite_project_clip(
+        sample_project["project_id"],
+        exported.clip_id,
+        is_favorite=False,
+    )
+
+    assert updated.is_favorite is False
+
+    manifest_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / "exports.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["exports"][0]["is_favorite"] is False
+
+
+def test_favorite_clip_missing_project(temp_backend_dirs):
+    missing_id = "11111111-1111-4111-8111-111111111111"
+
+    with pytest.raises(Exception) as exc_info:
+        favorite_project_clip(missing_id, "clip-id", is_favorite=True)
+
+    assert exc_info.value.status_code == 404
+
+
+def test_favorite_clip_missing_clip(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    _export_clip(sample_project, start_time=0.0, end_time=1.0, clip_name="Original")
+    missing_clip_id = str(uuid.uuid4())
+
+    with pytest.raises(ClipExportNotFoundError, match="was not found"):
+        favorite_project_clip(
+            sample_project["project_id"],
+            missing_clip_id,
+            is_favorite=True,
+        )
+
+
+def test_favorite_clip_older_manifest_without_is_favorite(
+    sample_project,
+    temp_backend_dirs,
+):
+    _set_video_metadata(sample_project)
+    exported = _export_clip(
+        sample_project,
+        start_time=0.0,
+        end_time=1.0,
+        clip_name="Legacy Clip",
+    )
+
+    manifest_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / "exports.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del manifest["exports"][0]["is_favorite"]
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    exports = list_project_clip_exports(sample_project["project_id"])
+    assert len(exports) == 1
+    assert exports[0].clip_id == exported.clip_id
+    assert exports[0].is_favorite is False
+
+    updated = favorite_project_clip(
+        sample_project["project_id"],
+        exported.clip_id,
+        is_favorite=True,
+    )
+    assert updated.is_favorite is True
+
+
+def test_favorite_clip_persistence_after_reload(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    exported = _export_clip(
+        sample_project,
+        start_time=0.0,
+        end_time=1.0,
+        clip_name="Persist Favorite",
+    )
+
+    favorite_project_clip(
+        sample_project["project_id"],
+        exported.clip_id,
+        is_favorite=True,
+    )
+
+    exports = list_project_clip_exports(sample_project["project_id"])
+    assert len(exports) == 1
+    assert exports[0].is_favorite is True
+
+
+def test_favorite_clip_unrelated_clips_unchanged(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    first = _export_clip(
+        sample_project,
+        start_time=0.0,
+        end_time=1.0,
+        clip_name="First",
+    )
+    second = _export_clip(
+        sample_project,
+        start_time=1.0,
+        end_time=2.0,
+        clip_name="Second",
+    )
+
+    favorite_project_clip(
+        sample_project["project_id"],
+        first.clip_id,
+        is_favorite=True,
+    )
+
+    manifest_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / "exports.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    records_by_id = {record["clip_id"]: record for record in manifest["exports"]}
+
+    assert records_by_id[first.clip_id]["is_favorite"] is True
+    assert records_by_id[second.clip_id]["is_favorite"] is False
+
+
+def test_favorite_clip_endpoint(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    exported = _export_clip(
+        sample_project,
+        start_time=0.0,
+        end_time=1.0,
+        clip_name="Endpoint Favorite",
+    )
+    client = TestClient(app)
+
+    response = client.patch(
+        f"/api/projects/{sample_project['project_id']}/clips/{exported.clip_id}/favorite",
+        json={"is_favorite": True},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["clip_id"] == exported.clip_id
+    assert body["is_favorite"] is True

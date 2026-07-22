@@ -142,6 +142,7 @@ def _record_to_export_response(
         clip_name=record.clip_name,
         created_at=record.created_at,
         export_status=record.export_status,
+        is_favorite=record.is_favorite,
     )
 
 
@@ -399,6 +400,22 @@ def rename_project_clip(project_id: str, clip_id: str, *, clip_name: str) -> Exp
     document = _load_exports_document(project_id)
     record = _find_export_record(document, clip_id)
     record.clip_name = trimmed_name
+    _write_exports_document(document)
+
+    return _record_to_export_response(project_id, record)
+
+
+def favorite_project_clip(
+    project_id: str,
+    clip_id: str,
+    *,
+    is_favorite: bool,
+) -> ExportClipResponse:
+    load_project(project_id)
+
+    document = _load_exports_document(project_id)
+    record = _find_export_record(document, clip_id)
+    record.is_favorite = is_favorite
     _write_exports_document(document)
 
     return _record_to_export_response(project_id, record)

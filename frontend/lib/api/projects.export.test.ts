@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   deleteProjectClip,
   exportProjectClip,
+  favoriteProjectClip,
   fetchProjectClipExports,
   renameProjectClip,
   resolveMediaUrl,
@@ -27,6 +28,7 @@ describe("exportProjectClip", () => {
       clip_name: "Big reveal moment",
       created_at: "2026-07-22T18:00:00Z",
       export_status: "completed",
+      is_favorite: false,
     };
 
     const fetchMock = vi.fn().mockResolvedValue({
@@ -102,6 +104,7 @@ describe("fetchProjectClipExports", () => {
           clip_name: "Saved clip",
           created_at: "2026-07-22T10:00:00Z",
           export_status: "completed",
+          is_favorite: true,
         },
       ],
     };
@@ -156,6 +159,7 @@ describe("renameProjectClip", () => {
       clip_name: "Renamed clip",
       created_at: "2026-07-22T10:00:00Z",
       export_status: "completed",
+      is_favorite: false,
     };
 
     const fetchMock = vi.fn().mockResolvedValue({
@@ -236,6 +240,68 @@ describe("deleteProjectClip", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(deleteProjectClip("project-1", "clip-1")).rejects.toEqual({
+      message: "Exported clip 'clip-1' was not found.",
+      status: 404,
+    });
+  });
+});
+
+describe("favoriteProjectClip", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("patches favorite state to the backend", async () => {
+    const mockResponse = {
+      clip_id: "clip-1",
+      project_id: "project-1",
+      filename: "saved.mp4",
+      relative_path: "project-1/clips/saved.mp4",
+      media_url: "/api/projects/project-1/media/clips/clip-1",
+      start_time: 1,
+      end_time: 2,
+      duration: 1,
+      file_size_bytes: 1000,
+      candidate_id: "candidate-123",
+      clip_name: "Saved clip",
+      created_at: "2026-07-22T10:00:00Z",
+      export_status: "completed",
+      is_favorite: true,
+    };
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockResponse,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await favoriteProjectClip("project-1", "clip-1", {
+      is_favorite: true,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/api/projects/project-1/clips/clip-1/favorite",
+      expect.objectContaining({
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_favorite: true }),
+      }),
+    );
+    expect(result).toEqual(mockResponse);
+  });
+
+  it("throws backend error messages", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      json: async () => ({ detail: "Exported clip 'clip-1' was not found." }),
+      statusText: "Not Found",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      favoriteProjectClip("project-1", "clip-1", { is_favorite: true }),
+    ).rejects.toEqual({
       message: "Exported clip 'clip-1' was not found.",
       status: 404,
     });

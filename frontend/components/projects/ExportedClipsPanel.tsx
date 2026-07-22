@@ -1,9 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { ExportClipResponse } from "@/lib/api/projects";
 import { resolveMediaUrl } from "@/lib/api/projects";
 import { Badge } from "@/components/ui/Badge";
+import {
+  defaultExportedClipSort,
+  filterAndSortExportedClips,
+  getClipDisplayName,
+  type ExportedClipSort,
+} from "@/lib/exported-clips-library";
 import { cn, formatDuration, formatFileSize } from "@/lib/utils";
 import {
   CheckCircle2,
@@ -12,13 +18,17 @@ import {
   Film,
   Loader2,
   Pencil,
+  Search,
+  Star,
   Trash2,
   Video,
+  X,
 } from "lucide-react";
 
 type ClipActionState = {
   renaming?: boolean;
   deleting?: boolean;
+  favoriting?: boolean;
   error?: string | null;
 };
 
@@ -28,7 +38,18 @@ type ExportedClipsPanelProps = {
   error?: string | null;
   onRename?: (clipId: string, clipName: string) => Promise<void>;
   onDelete?: (clipId: string) => Promise<void>;
+  onFavorite?: (clipId: string, isFavorite: boolean) => Promise<void>;
 };
+
+const SORT_OPTIONS: { value: ExportedClipSort; label: string }[] = [
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "name-asc", label: "Name A–Z" },
+  { value: "name-desc", label: "Name Z–A" },
+  { value: "shortest", label: "Shortest duration" },
+  { value: "longest", label: "Longest duration" },
+  { value: "favorites-first", label: "Favorites first" },
+];
 
 function formatTimestamp(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds));
@@ -52,10 +73,6 @@ function statusVariant(
   }
 }
 
-function getClipDisplayName(clip: ExportClipResponse): string {
-  return clip.clip_name?.trim() || clip.filename;
-}
-
 function getRenameDefaultValue(clip: ExportClipResponse): string {
   const trimmedName = clip.clip_name?.trim();
   if (trimmedName) {
@@ -70,6 +87,7 @@ type ExportedClipCardProps = {
   actionState?: ClipActionState;
   onRename?: (clipId: string, clipName: string) => Promise<void>;
   onDelete?: (clipId: string) => Promise<void>;
+  onFavorite?: (clipId: string, isFavorite: boolean) => Promise<void>;
 };
 
 function ExportedClipCard({
@@ -77,6 +95,7 @@ function ExportedClipCard({
   actionState,
   onRename,
   onDelete,
+  onFavorite,
 }: ExportedClipCardProps) {
   const mediaUrl = resolveMediaUrl(clip.media_url);
   const displayName = getClipDisplayName(clip);
@@ -87,8 +106,9 @@ function ExportedClipCard({
 
   const isRenaming = actionState?.renaming ?? false;
   const isDeleting = actionState?.deleting ?? false;
+  const isFavoriting = actionState?.favoriting ?? false;
   const actionError = actionState?.error ?? null;
-  const isBusy = isRenaming || isDeleting;
+  const isBusy = isRenaming || isDeleting || isFavoriting;
 
   function startRename() {
     setRenameValue(getRenameDefaultValue(clip));
@@ -128,91 +148,143 @@ function ExportedClipCard({
     setConfirmDelete(false);
   }
 
+  async function toggleFavorite() {
+    if (!onFavorite) {
+      return;
+    }
+
+    await onFavorite(clip.clip_id, !clip.is_favorite);
+  }
+
   return (
     <div className="overflow-hidden rounded-lg border border-emerald-500/30 bg-zinc-950/50 ring-1 ring-emerald-500/10">
       <div className="space-y-4 px-4 py-4">
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="success">Exported clip</Badge>
           <Badge variant={statusVariant(clip.export_status)}>{clip.export_status}</Badge>
+          {clip.is_favorite ? <Badge variant="warning">Favorite</Badge> : null}
         </div>
 
-        {isEditing ? (
-          <div className="space-y-2">
-            <label className="block text-xs font-medium text-zinc-400" htmlFor={`rename-${clip.clip_id}`}>
-              Rename clip
-            </label>
-            <input
-              id={`rename-${clip.clip_id}`}
-              type="text"
-              value={renameValue}
-              onChange={(event) => {
-                setRenameValue(event.target.value);
-                if (renameValidationError) {
-                  setRenameValidationError(null);
-                }
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  void submitRename();
-                }
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  cancelRename();
-                }
-              }}
-              disabled={isRenaming}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500/30 focus:border-emerald-500/50 focus:ring-2"
-              autoFocus
-            />
-            {renameValidationError ? (
-              <p className="text-xs text-red-300">{renameValidationError}</p>
-            ) : null}
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => void submitRename()}
+        <div className="flex items-start justify-between gap-3">
+          {isEditing ? (
+            <div className="min-w-0 flex-1 space-y-2">
+              <label className="block text-xs font-medium text-zinc-400" htmlFor={`rename-${clip.clip_id}`}>
+                Rename clip
+              </label>
+              <input
+                id={`rename-${clip.clip_id}`}
+                type="text"
+                value={renameValue}
+                onChange={(event) => {
+                  setRenameValue(event.target.value);
+                  if (renameValidationError) {
+                    setRenameValidationError(null);
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void submitRename();
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    cancelRename();
+                  }
+                }}
                 disabled={isRenaming}
-                className={cn(
-                  "inline-flex h-8 items-center justify-center rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 text-xs font-medium text-emerald-100 transition-colors hover:bg-emerald-500/20",
-                  isRenaming && "cursor-not-allowed opacity-60",
-                )}
-              >
-                {isRenaming ? (
-                  <>
-                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  "Save"
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={cancelRename}
-                disabled={isRenaming}
-                className="inline-flex h-8 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800"
-              >
-                Cancel
-              </button>
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500/30 focus:border-emerald-500/50 focus:ring-2"
+                autoFocus
+              />
+              {renameValidationError ? (
+                <p className="text-xs text-red-300">{renameValidationError}</p>
+              ) : null}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void submitRename()}
+                  disabled={isRenaming}
+                  className={cn(
+                    "inline-flex h-8 items-center justify-center rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 text-xs font-medium text-emerald-100 transition-colors hover:bg-emerald-500/20",
+                    isRenaming && "cursor-not-allowed opacity-60",
+                  )}
+                >
+                  {isRenaming ? (
+                    <>
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    "Save"
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelRename}
+                  disabled={isRenaming}
+                  className="inline-flex h-8 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
-          </div>
-        ) : (
-          <div>
-            <p className="text-sm font-medium text-zinc-100">{displayName}</p>
-            <p className="mt-1 font-mono text-xs text-zinc-500">{clip.filename}</p>
-          </div>
-        )}
+          ) : (
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-zinc-100">{displayName}</p>
+              <p className="mt-1 font-mono text-xs text-zinc-500">{clip.filename}</p>
+            </div>
+          )}
 
-        <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-500">
-          <span className="inline-flex items-center gap-1 font-mono text-emerald-300">
-            <Clock3 className="h-3 w-3" />
-            {formatTimestamp(clip.start_time)} → {formatTimestamp(clip.end_time)}
-          </span>
-          <span>Duration: {formatDuration(clip.duration)}</span>
-          <span>Size: {formatFileSize(clip.file_size_bytes)}</span>
-          <span>Created: {new Date(clip.created_at).toLocaleString()}</span>
+          {onFavorite ? (
+            <button
+              type="button"
+              onClick={() => void toggleFavorite()}
+              disabled={isBusy}
+              aria-label={clip.is_favorite ? "Remove from favorites" : "Add to favorites"}
+              aria-pressed={clip.is_favorite}
+              className={cn(
+                "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-colors",
+                clip.is_favorite
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"
+                  : "border-zinc-800 bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200",
+                isBusy && "cursor-not-allowed opacity-60",
+              )}
+            >
+              {isFavoriting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Star className={cn("h-4 w-4", clip.is_favorite && "fill-current")} />
+              )}
+            </button>
+          ) : null}
         </div>
+
+        <dl className="grid gap-2 text-xs text-zinc-500 sm:grid-cols-2">
+          <div>
+            <dt className="font-medium text-zinc-400">Duration</dt>
+            <dd className="mt-0.5 text-zinc-300">{formatDuration(clip.duration)}</dd>
+          </div>
+          <div>
+            <dt className="font-medium text-zinc-400">File size</dt>
+            <dd className="mt-0.5 text-zinc-300">{formatFileSize(clip.file_size_bytes)}</dd>
+          </div>
+          <div>
+            <dt className="font-medium text-zinc-400">Created</dt>
+            <dd className="mt-0.5 text-zinc-300">{new Date(clip.created_at).toLocaleString()}</dd>
+          </div>
+          <div>
+            <dt className="font-medium text-zinc-400">Source range</dt>
+            <dd className="mt-0.5 inline-flex items-center gap-1 font-mono text-emerald-300">
+              <Clock3 className="h-3 w-3" />
+              {formatTimestamp(clip.start_time)} → {formatTimestamp(clip.end_time)}
+            </dd>
+          </div>
+          {clip.candidate_id ? (
+            <div className="sm:col-span-2">
+              <dt className="font-medium text-zinc-400">Candidate source</dt>
+              <dd className="mt-0.5 font-mono text-zinc-300">{clip.candidate_id}</dd>
+            </div>
+          ) : null}
+        </dl>
 
         <div className="overflow-hidden rounded-lg border border-zinc-800 bg-black">
           <video
@@ -353,8 +425,16 @@ export function ExportedClipsPanel({
   error = null,
   onRename,
   onDelete,
+  onFavorite,
 }: ExportedClipsPanelProps) {
   const [clipActions, setClipActions] = useState<Record<string, ClipActionState>>({});
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sort, setSort] = useState<ExportedClipSort>(defaultExportedClipSort);
+
+  const visibleClips = useMemo(
+    () => filterAndSortExportedClips(exportedClips, searchQuery, sort),
+    [exportedClips, searchQuery, sort],
+  );
 
   async function handleRename(clipId: string, clipName: string) {
     if (!onRename) {
@@ -382,7 +462,7 @@ export function ExportedClipsPanel({
 
       setClipActions((current) => ({
         ...current,
-        [clipId]: { renaming: false, error: message },
+        [clipId]: { ...current[clipId], renaming: false, error: message },
       }));
     }
   }
@@ -414,7 +494,38 @@ export function ExportedClipsPanel({
 
       setClipActions((current) => ({
         ...current,
-        [clipId]: { deleting: false, error: message },
+        [clipId]: { ...current[clipId], deleting: false, error: message },
+      }));
+    }
+  }
+
+  async function handleFavorite(clipId: string, isFavorite: boolean) {
+    if (!onFavorite) {
+      return;
+    }
+
+    setClipActions((current) => ({
+      ...current,
+      [clipId]: { ...current[clipId], favoriting: true, error: null },
+    }));
+
+    try {
+      await onFavorite(clipId, isFavorite);
+      setClipActions((current) => ({
+        ...current,
+        [clipId]: { ...current[clipId], favoriting: false, error: null },
+      }));
+    } catch (favoriteError) {
+      const message =
+        favoriteError &&
+        typeof favoriteError === "object" &&
+        "message" in favoriteError
+          ? String((favoriteError as { message: string }).message)
+          : "Unable to update favorite.";
+
+      setClipActions((current) => ({
+        ...current,
+        [clipId]: { ...current[clipId], favoriting: false, error: message },
       }));
     }
   }
@@ -443,22 +554,75 @@ export function ExportedClipsPanel({
         <div>
           <p className="text-sm font-medium text-emerald-100">Rendered clip files</p>
           <p className="mt-1 text-sm text-emerald-100/80">
-            Saved MP4 exports for this project. Preview inline or download each clip.
+            Saved MP4 exports for this project. Preview inline, download, favorite, or search your clip library.
           </p>
         </div>
       </div>
 
-      <div className="space-y-3">
-        {exportedClips.map((clip) => (
-          <ExportedClipCard
-            key={clip.clip_id}
-            clip={clip}
-            actionState={clipActions[clip.clip_id]}
-            onRename={onRename ? handleRename : undefined}
-            onDelete={onDelete ? handleDelete : undefined}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="relative min-w-0 flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search by clip name or filename..."
+            aria-label="Search exported clips"
+            className="w-full rounded-lg border border-zinc-800 bg-zinc-950/60 py-2 pl-9 pr-9 text-sm text-zinc-100 outline-none ring-emerald-500/30 placeholder:text-zinc-500 focus:border-emerald-500/40 focus:ring-2"
           />
-        ))}
+          {searchQuery.trim() ? (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              aria-label="Clear search"
+              className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          ) : null}
+        </div>
+
+        <label className="flex shrink-0 items-center gap-2 text-xs text-zinc-400">
+          <span className="whitespace-nowrap">Sort by</span>
+          <select
+            value={sort}
+            onChange={(event) => setSort(event.target.value as ExportedClipSort)}
+            aria-label="Sort exported clips"
+            className="rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500/30 focus:border-emerald-500/40 focus:ring-2"
+          >
+            {SORT_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
+
+      {visibleClips.length === 0 ? (
+        <div className="flex items-start gap-3 rounded-lg border border-zinc-800 bg-zinc-950/40 px-4 py-6">
+          <Search className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500" />
+          <div>
+            <p className="text-sm font-medium text-zinc-300">No matching clips</p>
+            <p className="mt-1 text-sm text-zinc-500">
+              No exported clips match &quot;{searchQuery.trim()}&quot;. Try a different search term or clear the filter.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {visibleClips.map((clip) => (
+            <ExportedClipCard
+              key={clip.clip_id}
+              clip={clip}
+              actionState={clipActions[clip.clip_id]}
+              onRename={onRename ? handleRename : undefined}
+              onDelete={onDelete ? handleDelete : undefined}
+              onFavorite={onFavorite ? handleFavorite : undefined}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
