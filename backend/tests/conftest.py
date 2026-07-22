@@ -18,23 +18,27 @@ def temp_backend_dirs(tmp_path, monkeypatch):
     processed_dir = tmp_path / "processed"
     transcripts_dir = tmp_path / "transcripts"
     analysis_dir = tmp_path / "analysis"
+    clip_candidates_dir = tmp_path / "clip_candidates"
     upload_dir.mkdir()
     audio_dir.mkdir()
     processed_dir.mkdir()
     transcripts_dir.mkdir()
     analysis_dir.mkdir()
+    clip_candidates_dir.mkdir()
 
     monkeypatch.setattr(settings, "upload_dir", upload_dir)
     monkeypatch.setattr(settings, "audio_dir", audio_dir)
     monkeypatch.setattr(settings, "processed_dir", processed_dir)
     monkeypatch.setattr(settings, "transcripts_dir", transcripts_dir)
     monkeypatch.setattr(settings, "analysis_dir", analysis_dir)
+    monkeypatch.setattr(settings, "clip_candidates_dir", clip_candidates_dir)
     return {
         "upload_dir": upload_dir,
         "audio_dir": audio_dir,
         "processed_dir": processed_dir,
         "transcripts_dir": transcripts_dir,
         "analysis_dir": analysis_dir,
+        "clip_candidates_dir": clip_candidates_dir,
     }
 
 

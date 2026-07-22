@@ -61,6 +61,11 @@ class ProjectMetadata(BaseModel):
     analysis_started_at: str | None = None
     analysis_completed_at: str | None = None
     analysis_provider: str | None = None
+    clip_selection_status: ProcessingStatus = ProcessingStatus.PENDING
+    clip_candidates_path: str | None = None
+    clip_selection_started_at: str | None = None
+    clip_selection_completed_at: str | None = None
+    clip_candidate_count: int | None = None
     activity_log: list[ActivityLogEntry] = Field(default_factory=list)
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
@@ -96,6 +101,11 @@ class ProjectResponse(BaseModel):
     analysis_started_at: str | None = None
     analysis_completed_at: str | None = None
     analysis_provider: str | None = None
+    clip_selection_status: ProcessingStatus
+    clip_candidates_path: str | None = None
+    clip_selection_started_at: str | None = None
+    clip_selection_completed_at: str | None = None
+    clip_candidate_count: int | None = None
     size_bytes: int
     activity_log: list[ActivityLogEntry]
     created_at: str
@@ -192,6 +202,58 @@ class AnalyzeResponse(BaseModel):
     analysis_path: str
 
 
+class ClipCandidateStatus(str, Enum):
+    PROPOSED = "proposed"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class ClipCandidate(BaseModel):
+    clip_id: str
+    start: float = Field(ge=0.0)
+    end: float = Field(gt=0.0)
+    duration: float = Field(gt=0.0)
+    segment_ids: list[int]
+    transcript_text: str
+    score: float = Field(ge=0.0, le=100.0)
+    confidence: float = Field(ge=0.0, le=1.0)
+    primary_emotion: str
+    hook_score: float = Field(ge=0.0, le=10.0)
+    payoff_score: float = Field(ge=0.0, le=10.0)
+    standalone_score: float = Field(ge=0.0, le=10.0)
+    context_dependency_score: float = Field(ge=0.0, le=10.0)
+    title_suggestion: str
+    reason: str
+    status: ClipCandidateStatus = ClipCandidateStatus.PROPOSED
+
+
+class ClipCandidatesDocument(BaseModel):
+    project_id: str
+    candidate_count: int
+    min_duration_seconds: float
+    max_duration_seconds: float
+    max_gap_seconds: float
+    max_candidates: int
+    source_duration_seconds: float
+    candidates: list[ClipCandidate]
+    created_at: str = Field(default_factory=utc_now_iso)
+
+
+class SelectClipsRequest(BaseModel):
+    min_duration_seconds: float | None = None
+    max_duration_seconds: float | None = None
+    max_gap_seconds: float | None = None
+    max_candidates: int | None = None
+    min_score: float | None = None
+
+
+class SelectClipsResponse(BaseModel):
+    project_id: str
+    status: str
+    candidate_count: int
+    clip_candidates_path: str
+
+
 class FFmpegAvailability(BaseModel):
     ffmpeg_available: bool
     ffprobe_available: bool
@@ -221,6 +283,11 @@ def project_to_response(project: ProjectMetadata) -> ProjectResponse:
         analysis_started_at=project.analysis_started_at,
         analysis_completed_at=project.analysis_completed_at,
         analysis_provider=project.analysis_provider,
+        clip_selection_status=project.clip_selection_status,
+        clip_candidates_path=project.clip_candidates_path,
+        clip_selection_started_at=project.clip_selection_started_at,
+        clip_selection_completed_at=project.clip_selection_completed_at,
+        clip_candidate_count=project.clip_candidate_count,
         size_bytes=project.size_bytes,
         activity_log=project.activity_log,
         created_at=project.created_at,

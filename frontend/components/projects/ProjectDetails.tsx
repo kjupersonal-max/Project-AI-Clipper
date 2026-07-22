@@ -5,18 +5,25 @@ import {
   extractProjectAudio,
   fetchProject,
   fetchProjectAnalysis,
+  fetchProjectClipCandidates,
   fetchProjectTranscript,
   getProjectVideoUrl,
   inspectProject,
+  selectProjectClips,
   transcribeProject,
   type AnalysisDocument,
   type ApiError,
+  type ClipCandidatesDocument,
   type Project,
   type TranscriptDocument,
 } from "@/lib/api/projects";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader } from "@/components/ui/Card";
+import {
+  ClipCandidatesPanel,
+  ClipCandidatesState,
+} from "@/components/projects/ClipCandidatesPanel";
 import {
   TimelineAnalysisPanel,
   TimelineAnalysisState,
@@ -28,11 +35,16 @@ import {
 import { cn, formatDuration, formatFileSize } from "@/lib/utils";
 import { defaultAnalysisFilters, type AnalysisFilters } from "@/lib/analysis-filters";
 import {
+  defaultClipCandidateFilters,
+  type ClipCandidateFilters,
+} from "@/lib/clip-candidate-filters";
+import {
   AlertCircle,
   AudioLines,
   CheckCircle2,
   Loader2,
   ScanSearch,
+  Scissors,
   Sparkles,
   Subtitles,
 } from "lucide-react";
@@ -75,20 +87,28 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
   const [extractState, setExtractState] = useState<ActionState>("idle");
   const [transcribeState, setTranscribeState] = useState<ActionState>("idle");
   const [analyzeState, setAnalyzeState] = useState<ActionState>("idle");
+  const [selectClipsState, setSelectClipsState] = useState<ActionState>("idle");
   const [transcript, setTranscript] = useState<TranscriptDocument | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisDocument | null>(null);
+  const [clipCandidates, setClipCandidates] = useState<ClipCandidatesDocument | null>(null);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
   const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [clipCandidatesLoading, setClipCandidatesLoading] = useState(false);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [clipCandidatesError, setClipCandidatesError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [analysisFilters, setAnalysisFilters] = useState<AnalysisFilters>(defaultAnalysisFilters);
+  const [clipCandidateFilters, setClipCandidateFilters] = useState<ClipCandidateFilters>(
+    defaultClipCandidateFilters,
+  );
 
   const isActionLoading =
     inspectState === "loading" ||
     extractState === "loading" ||
     transcribeState === "loading" ||
-    analyzeState === "loading";
+    analyzeState === "loading" ||
+    selectClipsState === "loading";
 
   const loadTranscript = useCallback(async () => {
     setTranscriptLoading(true);
@@ -146,6 +166,34 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
     }
   }, [projectId]);
 
+  const loadClipCandidates = useCallback(async () => {
+    setClipCandidatesLoading(true);
+    setClipCandidatesError(null);
+
+    try {
+      const data = await fetchProjectClipCandidates(projectId);
+      setClipCandidates(data);
+      return data;
+    } catch (error) {
+      const status =
+        error && typeof error === "object" && "status" in error
+          ? (error as ApiError).status
+          : undefined;
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? String((error as ApiError).message)
+          : "Unable to load clip candidates.";
+
+      setClipCandidates(null);
+      if (status !== 404) {
+        setClipCandidatesError(message);
+      }
+      return null;
+    } finally {
+      setClipCandidatesLoading(false);
+    }
+  }, [projectId]);
+
   const applyProjectState = useCallback(
     async (data: Project) => {
       setProject(data);
@@ -162,8 +210,15 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
         setAnalysis(null);
         setAnalysisError(null);
       }
+
+      if (data.clip_selection_status === "completed") {
+        await loadClipCandidates();
+      } else {
+        setClipCandidates(null);
+        setClipCandidatesError(null);
+      }
     },
-    [loadAnalysis, loadTranscript],
+    [loadAnalysis, loadClipCandidates, loadTranscript],
   );
 
   const seekVideoTo = useCallback((seconds: number) => {
@@ -191,6 +246,7 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
       setProject(null);
       setTranscript(null);
       setAnalysis(null);
+      setClipCandidates(null);
       return null;
     }
   }, [applyProjectState, projectId]);
@@ -317,6 +373,26 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
     }
   };
 
+  const handleSelectClips = async () => {
+    setSelectClipsState("loading");
+    setActionError(null);
+    setClipCandidatesError(null);
+
+    try {
+      await selectProjectClips(projectId);
+      setSelectClipsState("success");
+      await refreshProject();
+    } catch (error) {
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? String((error as ApiError).message)
+          : "Clip selection failed.";
+      setActionError(message);
+      setSelectClipsState("error");
+      await refreshProject();
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-24 text-sm text-zinc-500">
@@ -363,6 +439,9 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
             </Badge>
             <Badge variant={statusVariant(project.analysis_status)}>
               Analysis: {project.analysis_status}
+            </Badge>
+            <Badge variant={statusVariant(project.clip_selection_status)}>
+              Clip selection: {project.clip_selection_status}
             </Badge>
           </div>
           <div>
@@ -431,6 +510,19 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
           >
             {analyzeState === "loading" ? "Analyzing..." : "Analyze"}
           </Button>
+          <Button
+            onClick={handleSelectClips}
+            disabled={isActionLoading || project.analysis_status !== "completed"}
+            icon={
+              selectClipsState === "loading" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Scissors className="h-4 w-4" />
+              )
+            }
+          >
+            {selectClipsState === "loading" ? "Selecting..." : "Select Clips"}
+          </Button>
         </div>
       </div>
 
@@ -446,20 +538,37 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
       {(inspectState === "success" ||
         extractState === "success" ||
         transcribeState === "success" ||
-        analyzeState === "success") &&
+        analyzeState === "success" ||
+        selectClipsState === "success") &&
       !actionError ? (
         <Card>
           <CardContent className="flex items-start gap-3 p-5">
             <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
             <p className="text-sm text-emerald-300">
-              {analyzeState === "success"
-                ? "Timeline analysis completed. Results loaded below."
-                : transcribeState === "success"
-                  ? "Transcription completed. Transcript loaded below."
-                  : extractState === "success"
-                    ? "Audio extraction completed. Project state refreshed."
-                    : "Video inspection completed. Project state refreshed."}
+              {selectClipsState === "success"
+                ? "Clip selection completed. Proposed candidates loaded below."
+                : analyzeState === "success"
+                  ? "Timeline analysis completed. Results loaded below."
+                  : transcribeState === "success"
+                    ? "Transcription completed. Transcript loaded below."
+                    : extractState === "success"
+                      ? "Audio extraction completed. Project state refreshed."
+                      : "Video inspection completed. Project state refreshed."}
             </p>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {selectClipsState === "loading" ? (
+        <Card>
+          <CardContent className="flex items-start gap-3 p-5">
+            <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-amber-300" />
+            <div>
+              <p className="text-sm font-medium text-zinc-200">Clip selection in progress</p>
+              <p className="mt-1 text-sm text-zinc-500">
+                Grouping strong transcript segments into ranked proposed clip candidates.
+              </p>
+            </div>
           </CardContent>
         </Card>
       ) : null}
@@ -585,6 +694,12 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
                   {project.analysis_status}
                 </Badge>
               </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-zinc-500">Clip selection</span>
+                <Badge variant={statusVariant(project.clip_selection_status)}>
+                  {project.clip_selection_status}
+                </Badge>
+              </div>
               {project.extracted_audio_path ? (
                 <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
                   <p className="text-xs uppercase tracking-wider text-zinc-500">
@@ -623,6 +738,21 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
                   {project.analysis_provider ? (
                     <p className="mt-2 text-xs text-zinc-500">
                       Provider: {project.analysis_provider}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+              {project.clip_candidates_path ? (
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+                  <p className="text-xs uppercase tracking-wider text-zinc-500">
+                    Clip candidates
+                  </p>
+                  <p className="mt-1 break-all font-mono text-xs text-zinc-300">
+                    {project.clip_candidates_path}
+                  </p>
+                  {project.clip_candidate_count != null ? (
+                    <p className="mt-2 text-xs text-zinc-500">
+                      Proposed clips: {project.clip_candidate_count}
                     </p>
                   ) : null}
                 </div>
@@ -705,6 +835,41 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
           project.analysis_status !== "completed" ? (
             <p className="text-sm text-zinc-500">
               No timeline analysis yet. Complete transcription, then click Analyze.
+            </p>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="Clip Candidates"
+          description={
+            project.clip_selection_status === "completed"
+              ? "Ranked proposed clip ranges — not rendered video files"
+              : "Run clip selection after analysis to propose short-form clips"
+          }
+        />
+        <CardContent>
+          {clipCandidates ? (
+            <ClipCandidatesPanel
+              clipCandidates={clipCandidates}
+              filters={clipCandidateFilters}
+              onFiltersChange={setClipCandidateFilters}
+              onSeek={seekVideoTo}
+            />
+          ) : (
+            <ClipCandidatesState
+              loading={clipCandidatesLoading || selectClipsState === "loading"}
+              error={clipCandidatesError}
+            />
+          )}
+          {!clipCandidates &&
+          !clipCandidatesLoading &&
+          selectClipsState !== "loading" &&
+          !clipCandidatesError &&
+          project.clip_selection_status !== "completed" ? (
+            <p className="text-sm text-zinc-500">
+              No clip candidates yet. Complete analysis, then click Select Clips.
             </p>
           ) : null}
         </CardContent>

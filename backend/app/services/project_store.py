@@ -51,6 +51,7 @@ def ensure_backend_dirs() -> None:
     settings.audio_dir.mkdir(parents=True, exist_ok=True)
     settings.transcripts_dir.mkdir(parents=True, exist_ok=True)
     settings.analysis_dir.mkdir(parents=True, exist_ok=True)
+    settings.clip_candidates_dir.mkdir(parents=True, exist_ok=True)
 
 
 def create_project_metadata(
@@ -167,6 +168,24 @@ def get_analysis_output_path(project_id: str) -> Path:
 
 def get_relative_analysis_path(project_id: str) -> str:
     return f"{project_id}/{settings.analysis_output_filename}"
+
+
+def get_clip_candidates_output_dir(project_id: str) -> Path:
+    validated_id = validate_project_id(project_id)
+    clip_dir = _resolve_within(
+        settings.clip_candidates_dir,
+        settings.clip_candidates_dir / validated_id,
+    )
+    clip_dir.mkdir(parents=True, exist_ok=True)
+    return clip_dir
+
+
+def get_clip_candidates_output_path(project_id: str) -> Path:
+    return get_clip_candidates_output_dir(project_id) / settings.clip_candidates_output_filename
+
+
+def get_relative_clip_candidates_path(project_id: str) -> str:
+    return f"{project_id}/{settings.clip_candidates_output_filename}"
 
 
 def update_project(project_id: str, updater) -> ProjectMetadata:

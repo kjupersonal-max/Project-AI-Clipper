@@ -4,10 +4,13 @@ from fastapi.responses import FileResponse
 from app.models.project import (
     AnalysisDocument,
     AnalyzeResponse,
+    ClipCandidatesDocument,
     ExtractAudioResponse,
     InspectResponse,
     ProcessingStatus,
     ProjectResponse,
+    SelectClipsRequest,
+    SelectClipsResponse,
     TranscribeResponse,
     TranscriptDocument,
     project_to_response,
@@ -15,6 +18,7 @@ from app.models.project import (
 )
 from app.services.project_store import (
     get_relative_analysis_path,
+    get_relative_clip_candidates_path,
     get_relative_transcript_path,
     load_project,
     locate_video_file,
@@ -22,6 +26,16 @@ from app.services.project_store import (
     validate_project_id,
 )
 from app.services.analysis.base import ProviderConfigurationError, AnalysisProviderError
+from app.services.clip_selection import (
+    ClipCandidatesNotFoundError,
+    ClipSelectionAnalysisRequiredError,
+    ClipSelectionProcessError,
+    ClipSelectionTranscriptRequiredError,
+    InvalidAnalysisForSelectionError,
+    cleanup_clip_candidates_output,
+    load_project_clip_candidates,
+    select_project_clips,
+)
 from app.services.timeline_analysis import (
     AnalysisNotFoundError,
     AnalysisProcessError,
@@ -354,5 +368,107 @@ def analyze_project(project_id: str) -> AnalyzeResponse:
         project.last_error = exc.message
         project.analysis_completed_at = utc_now_iso()
         project.append_log(f"Timeline analysis failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+
+
+@router.get("/{project_id}/clip-candidates", response_model=ClipCandidatesDocument)
+def get_project_clip_candidates(project_id: str) -> ClipCandidatesDocument:
+    validate_project_id(project_id)
+    try:
+        return load_project_clip_candidates(project_id)
+    except ClipCandidatesNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipSelectionProcessError as exc:
+        raise HTTPException(status_code=500, detail=exc.message) from exc
+
+
+@router.post("/{project_id}/select-clips", response_model=SelectClipsResponse)
+def select_clips(
+    project_id: str,
+    request: SelectClipsRequest | None = None,
+) -> SelectClipsResponse:
+    validate_project_id(project_id)
+    project = load_project(project_id)
+    options = request or SelectClipsRequest()
+
+    project.clip_selection_status = ProcessingStatus.PROCESSING
+    project.clip_selection_started_at = utc_now_iso()
+    project.clip_selection_completed_at = None
+    project.clip_candidates_path = None
+    project.clip_candidate_count = None
+    project.last_error = None
+    project.append_log("Clip selection started.")
+    save_project(project)
+
+    try:
+        document = select_project_clips(
+            project_id,
+            min_duration_seconds=options.min_duration_seconds,
+            max_duration_seconds=options.max_duration_seconds,
+            max_gap_seconds=options.max_gap_seconds,
+            max_candidates=options.max_candidates,
+            min_score=options.min_score,
+        )
+        relative_path = get_relative_clip_candidates_path(project_id)
+        project = load_project(project_id)
+        project.clip_selection_status = ProcessingStatus.COMPLETED
+        project.clip_candidates_path = relative_path
+        project.clip_selection_completed_at = utc_now_iso()
+        project.clip_candidate_count = document.candidate_count
+        project.last_error = None
+        project.append_log(
+            f"Clip selection completed with {document.candidate_count} proposed candidates."
+        )
+        save_project(project)
+
+        return SelectClipsResponse(
+            project_id=project_id,
+            status="completed",
+            candidate_count=document.candidate_count,
+            clip_candidates_path=relative_path,
+        )
+    except HTTPException as exc:
+        cleanup_clip_candidates_output(project_id)
+        project = load_project(project_id)
+        project.clip_selection_status = ProcessingStatus.FAILED
+        detail = exc.detail if isinstance(exc.detail, str) else "Clip selection failed."
+        project.last_error = detail
+        project.clip_selection_completed_at = utc_now_iso()
+        project.append_log(f"Clip selection failed: {detail}", level="error")
+        save_project(project)
+        raise
+    except ClipSelectionTranscriptRequiredError as exc:
+        project = load_project(project_id)
+        project.clip_selection_status = ProcessingStatus.FAILED
+        project.last_error = exc.message
+        project.clip_selection_completed_at = utc_now_iso()
+        project.append_log(f"Clip selection failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipSelectionAnalysisRequiredError as exc:
+        project = load_project(project_id)
+        project.clip_selection_status = ProcessingStatus.FAILED
+        project.last_error = exc.message
+        project.clip_selection_completed_at = utc_now_iso()
+        project.append_log(f"Clip selection failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except InvalidAnalysisForSelectionError as exc:
+        cleanup_clip_candidates_output(project_id)
+        project = load_project(project_id)
+        project.clip_selection_status = ProcessingStatus.FAILED
+        project.last_error = exc.message
+        project.clip_selection_completed_at = utc_now_iso()
+        project.append_log(f"Clip selection failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+    except ClipSelectionProcessError as exc:
+        cleanup_clip_candidates_output(project_id)
+        project = load_project(project_id)
+        project.clip_selection_status = ProcessingStatus.FAILED
+        project.last_error = exc.message
+        project.clip_selection_completed_at = utc_now_iso()
+        project.append_log(f"Clip selection failed: {exc.message}", level="error")
         save_project(project)
         raise HTTPException(status_code=422, detail=exc.message) from exc

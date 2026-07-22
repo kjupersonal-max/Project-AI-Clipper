@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     analysis_api_key: str = ""
     analysis_api_base_url: str | None = None
     analysis_batch_size: int = 10
+    clip_candidates_dir: Path = BACKEND_ROOT / "clip_candidates"
+    clip_candidates_output_filename: str = "clip_candidates.json"
+    clip_selection_min_duration_seconds: float = 15.0
+    clip_selection_max_duration_seconds: float = 60.0
+    clip_selection_max_gap_seconds: float = 2.5
+    clip_selection_max_candidates: int = 10
+    clip_selection_min_score: float = 35.0
 
 
 settings = Settings()

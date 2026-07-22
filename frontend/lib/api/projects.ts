@@ -48,6 +48,11 @@ export type Project = {
   analysis_started_at: string | null;
   analysis_completed_at: string | null;
   analysis_provider: string | null;
+  clip_selection_status: ProcessingStatus;
+  clip_candidates_path: string | null;
+  clip_selection_started_at: string | null;
+  clip_selection_completed_at: string | null;
+  clip_candidate_count: number | null;
   size_bytes: number;
   activity_log: ActivityLogEntry[];
   created_at: string;
@@ -142,6 +147,52 @@ export type AnalyzeResponse = {
   segment_count: number;
   clip_candidate_count: number;
   analysis_path: string;
+};
+
+export type ClipCandidate = {
+  clip_id: string;
+  start: number;
+  end: number;
+  duration: number;
+  segment_ids: number[];
+  transcript_text: string;
+  score: number;
+  confidence: number;
+  primary_emotion: string;
+  hook_score: number;
+  payoff_score: number;
+  standalone_score: number;
+  context_dependency_score: number;
+  title_suggestion: string;
+  reason: string;
+  status: string;
+};
+
+export type ClipCandidatesDocument = {
+  project_id: string;
+  candidate_count: number;
+  min_duration_seconds: number;
+  max_duration_seconds: number;
+  max_gap_seconds: number;
+  max_candidates: number;
+  source_duration_seconds: number;
+  candidates: ClipCandidate[];
+  created_at: string;
+};
+
+export type SelectClipsRequest = {
+  min_duration_seconds?: number | null;
+  max_duration_seconds?: number | null;
+  max_gap_seconds?: number | null;
+  max_candidates?: number | null;
+  min_score?: number | null;
+};
+
+export type SelectClipsResponse = {
+  project_id: string;
+  status: string;
+  candidate_count: number;
+  clip_candidates_path: string;
 };
 
 export type ApiError = {
@@ -251,6 +302,39 @@ export async function fetchProjectAnalysis(projectId: string): Promise<AnalysisD
   }
 
   return response.json() as Promise<AnalysisDocument>;
+}
+
+export async function selectProjectClips(
+  projectId: string,
+  request: SelectClipsRequest = {},
+): Promise<SelectClipsResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/select-clips`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<SelectClipsResponse>;
+}
+
+export async function fetchProjectClipCandidates(
+  projectId: string,
+): Promise<ClipCandidatesDocument> {
+  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/clip-candidates`, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<ClipCandidatesDocument>;
 }
 
 export function getProjectVideoUrl(projectId: string): string {
