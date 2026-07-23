@@ -217,6 +217,9 @@ export type ExportClipResponse = {
   created_at: string;
   export_status: ProcessingStatus;
   is_favorite: boolean;
+  export_kind?: "raw" | "captioned";
+  source_clip_id?: string | null;
+  caption_style_preset?: string | null;
 };
 
 export type ClipExportsListResponse = {
@@ -702,4 +705,22 @@ export async function resetProjectClipCaptionStyle(
   }
 
   return response.json() as Promise<ClipCaptionsResponse>;
+}
+
+export async function renderProjectClipCaptions(
+  projectId: string,
+  clipId: string,
+): Promise<ExportClipResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/captions/render`,
+    {
+      method: "POST",
+    },
+  );
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<ExportClipResponse>;
 }

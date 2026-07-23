@@ -26,6 +26,7 @@ import {
   Save,
   Sparkles,
   Trash2,
+  Video,
   X,
 } from "lucide-react";
 
@@ -35,14 +36,17 @@ type CaptionEditorProps = {
   loading?: boolean;
   generating?: boolean;
   saving?: boolean;
+  rendering?: boolean;
   styleSaving?: boolean;
   styleResetting?: boolean;
   resetting?: boolean;
   error?: string | null;
+  renderSuccess?: string | null;
   onGenerate: () => Promise<void>;
   onSave: (segments: CaptionSegment[]) => Promise<void>;
   onSaveStyle: (style: CaptionStyle) => Promise<void>;
   onResetStyle: () => Promise<void>;
+  onRender: () => Promise<void>;
   onReset: () => Promise<void>;
   onClose: () => void;
 };
@@ -57,18 +61,22 @@ export function CaptionEditor({
   loading = false,
   generating = false,
   saving = false,
+  rendering = false,
   styleSaving = false,
   styleResetting = false,
   resetting = false,
   error = null,
+  renderSuccess = null,
   onGenerate,
   onSave,
   onSaveStyle,
   onResetStyle,
+  onRender,
   onReset,
   onClose,
 }: CaptionEditorProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const renderInFlightRef = useRef(false);
   const currentTimeRef = useRef(0);
   const [segments, setSegments] = useState<CaptionSegment[]>(() =>
     captions ? cloneCaptionSegments(sortCaptionSegments(captions.segments)) : [],
@@ -93,7 +101,7 @@ export function CaptionEditor({
   const clipTitle = getClipDisplayName(clip);
   const mediaUrl = resolveMediaUrl(getProjectClipMediaUrl(clip.project_id, clip.clip_id));
   const isBusy =
-    loading || generating || saving || styleSaving || styleResetting || resetting;
+    loading || generating || saving || rendering || styleSaving || styleResetting || resetting;
 
   const activeCaption = useMemo(
     () => findActiveCaption(segments, playbackTime),
@@ -104,6 +112,34 @@ export function CaptionEditor({
     () => validateCaptionSegments(segments, clip.duration),
     [clip.duration, segments],
   );
+
+  const canRender =
+    Boolean(captions) &&
+    segments.length > 0 &&
+    !segmentsDirty &&
+    !styleDirty &&
+    !validationError;
+
+  useEffect(() => {
+    if (!rendering) {
+      renderInFlightRef.current = false;
+    }
+  }, [rendering]);
+
+  const handleRender = useCallback(async () => {
+    if (renderInFlightRef.current || isBusy || !canRender) {
+      return;
+    }
+
+    renderInFlightRef.current = true;
+    try {
+      await onRender();
+    } catch {
+      if (!rendering) {
+        renderInFlightRef.current = false;
+      }
+    }
+  }, [canRender, isBusy, onRender, rendering]);
 
   const togglePlayback = useCallback(async () => {
     const video = videoRef.current;
@@ -500,7 +536,27 @@ export function CaptionEditor({
             </div>
           ) : null}
 
+          {renderSuccess ? (
+            <div className="mb-3 rounded-lg border border-violet-500/20 bg-violet-500/5 px-3 py-2 text-sm text-violet-100">
+              {renderSuccess}
+            </div>
+          ) : null}
+
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => void handleRender()}
+              disabled={isBusy || !canRender}
+              aria-label="Export with captions"
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-violet-500/30 bg-violet-500/10 px-4 text-sm font-medium text-violet-100 disabled:opacity-50"
+            >
+              {rendering ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Video className="h-4 w-4" />
+              )}
+              Export with captions
+            </button>
             <button
               type="button"
               onClick={onClose}

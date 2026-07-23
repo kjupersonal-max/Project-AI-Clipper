@@ -15,6 +15,14 @@ export function getClipDisplayName(clip: ExportClipResponse): string {
   return clip.clip_name?.trim() || clip.filename;
 }
 
+export function isCaptionedExport(clip: ExportClipResponse): boolean {
+  return clip.export_kind === "captioned";
+}
+
+export function canEditClipCaptions(clip: ExportClipResponse): boolean {
+  return !isCaptionedExport(clip);
+}
+
 function compareCreatedAtDesc(left: ExportClipResponse, right: ExportClipResponse): number {
   return new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
 }

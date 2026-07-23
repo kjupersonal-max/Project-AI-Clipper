@@ -89,6 +89,7 @@ function renderEditor(
     onSave: vi.fn().mockResolvedValue(undefined),
     onSaveStyle: vi.fn().mockResolvedValue(undefined),
     onResetStyle: vi.fn().mockResolvedValue(undefined),
+    onRender: vi.fn().mockResolvedValue(undefined),
     onReset: vi.fn().mockResolvedValue(undefined),
     onClose: vi.fn(),
     ...overrides,
@@ -133,6 +134,7 @@ describe("CaptionEditor", () => {
         onSave={vi.fn()}
         onSaveStyle={vi.fn()}
         onResetStyle={vi.fn()}
+        onRender={vi.fn()}
         onReset={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -148,6 +150,7 @@ describe("CaptionEditor", () => {
         onSave={vi.fn()}
         onSaveStyle={vi.fn()}
         onResetStyle={vi.fn()}
+        onRender={vi.fn()}
         onReset={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -180,6 +183,7 @@ describe("CaptionEditor", () => {
         onSave={vi.fn()}
         onSaveStyle={vi.fn()}
         onResetStyle={vi.fn()}
+        onRender={vi.fn()}
         onReset={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -365,5 +369,37 @@ describe("CaptionEditor", () => {
     renderEditor({ captions: captionsWithWords });
 
     expect(matchMediaMock).toHaveBeenCalled();
+  });
+
+  it("shows export with captions button when captions exist", () => {
+    renderEditor();
+    expect(screen.getByRole("button", { name: /export with captions/i })).toBeInTheDocument();
+  });
+
+  it("disables export with captions while rendering", () => {
+    renderEditor({ rendering: true });
+    expect(screen.getByRole("button", { name: /export with captions/i })).toBeDisabled();
+  });
+
+  it("calls render handler on export with captions", async () => {
+    const user = userEvent.setup();
+    const onRender = vi.fn().mockResolvedValue(undefined);
+    renderEditor({ onRender });
+
+    await user.click(screen.getByRole("button", { name: /export with captions/i }));
+    expect(onRender).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: /export with captions/i }));
+    expect(onRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows render success message from parent", () => {
+    renderEditor({ renderSuccess: "Captioned export ready: Sample (captioned)." });
+    expect(screen.getByText(/captioned export ready/i)).toBeInTheDocument();
+  });
+
+  it("shows render failure from parent error state", () => {
+    renderEditor({ error: "Unable to render captioned export." });
+    expect(screen.getByText(/unable to render captioned export/i)).toBeInTheDocument();
   });
 });

@@ -144,6 +144,9 @@ def _record_to_export_response(
         created_at=record.created_at,
         export_status=record.export_status,
         is_favorite=record.is_favorite,
+        export_kind=record.export_kind,
+        source_clip_id=record.source_clip_id,
+        caption_style_preset=record.caption_style_preset,
     )
 
 

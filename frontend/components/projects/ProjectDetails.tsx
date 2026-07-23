@@ -17,6 +17,7 @@ import {
   getProjectVideoUrl,
   inspectProject,
   renameProjectClip,
+  renderProjectClipCaptions,
   resetProjectClipCaptionStyle,
   selectProjectClips,
   trimProjectClip,
@@ -156,6 +157,8 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
   const [captionsSaving, setCaptionsSaving] = useState(false);
   const [captionStyleSaving, setCaptionStyleSaving] = useState(false);
   const [captionStyleResetting, setCaptionStyleResetting] = useState(false);
+  const [captionsRendering, setCaptionsRendering] = useState(false);
+  const [captionRenderSuccess, setCaptionRenderSuccess] = useState<string | null>(null);
   const [captionsResetting, setCaptionsResetting] = useState(false);
   const [captionsError, setCaptionsError] = useState<string | null>(null);
   const [exportStates, setExportStates] = useState<Record<string, CandidateExportState>>({});
@@ -163,6 +166,7 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
     () => new Set(),
   );
   const loadExportedClipsRequestIdRef = useRef(0);
+  const captionsRenderInFlightRef = useRef(false);
   const pendingDeletedClipIdsRef = useRef<Set<string>>(new Set());
   const exportStatesRef = useRef(exportStates);
 
@@ -524,6 +528,7 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
       captionsSaving ||
       captionStyleSaving ||
       captionStyleResetting ||
+      captionsRendering ||
       captionsResetting
     ) {
       return;
@@ -531,10 +536,12 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
     setCaptionClip(null);
     setClipCaptions(null);
     setCaptionsError(null);
+    setCaptionRenderSuccess(null);
   }, [
     captionStyleResetting,
     captionStyleSaving,
     captionsGenerating,
+    captionsRendering,
     captionsResetting,
     captionsSaving,
   ]);
@@ -640,6 +647,35 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
       setCaptionsError(message);
     } finally {
       setCaptionStyleResetting(false);
+    }
+  }, [captionClip, projectId]);
+
+  const handleRenderCaptions = useCallback(async () => {
+    if (!captionClip || captionsRenderInFlightRef.current) {
+      return;
+    }
+
+    captionsRenderInFlightRef.current = true;
+    setCaptionsRendering(true);
+    setCaptionsError(null);
+    setCaptionRenderSuccess(null);
+
+    try {
+      const rendered = await renderProjectClipCaptions(projectId, captionClip.clip_id);
+      setExportedClips((current) => mergeExportedClips([rendered], current));
+      setCaptionRenderSuccess(
+        `Captioned export ready: ${rendered.clip_name ?? rendered.filename}. Find it in Exported Clips.`,
+      );
+    } catch (error) {
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? String((error as ApiError).message)
+          : "Unable to render captioned export.";
+      setCaptionsError(message);
+      throw error;
+    } finally {
+      captionsRenderInFlightRef.current = false;
+      setCaptionsRendering(false);
     }
   }, [captionClip, projectId]);
 
@@ -1389,12 +1425,15 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
           saving={captionsSaving}
           styleSaving={captionStyleSaving}
           styleResetting={captionStyleResetting}
+          rendering={captionsRendering}
           resetting={captionsResetting}
           error={captionsError}
+          renderSuccess={captionRenderSuccess}
           onGenerate={handleGenerateCaptions}
           onSave={handleSaveCaptions}
           onSaveStyle={handleSaveCaptionStyle}
           onResetStyle={handleResetCaptionStyle}
+          onRender={handleRenderCaptions}
           onReset={handleResetCaptions}
           onClose={handleCloseCaptionsEditor}
         />

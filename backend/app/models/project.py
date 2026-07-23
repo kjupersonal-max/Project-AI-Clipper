@@ -262,6 +262,11 @@ class FFmpegAvailability(BaseModel):
     error: str | None = None
 
 
+class ExportClipKind(str, Enum):
+    RAW = "raw"
+    CAPTIONED = "captioned"
+
+
 class ExportClipRequest(BaseModel):
     start_time: float = Field(ge=0.0)
     end_time: float = Field(gt=0.0)
@@ -304,6 +309,9 @@ class ExportClipResponse(BaseModel):
     created_at: str
     export_status: ProcessingStatus
     is_favorite: bool = False
+    export_kind: ExportClipKind = ExportClipKind.RAW
+    source_clip_id: str | None = None
+    caption_style_preset: str | None = None
 
 
 class ExportedClipRecord(BaseModel):
@@ -320,6 +328,9 @@ class ExportedClipRecord(BaseModel):
     created_at: str = Field(default_factory=utc_now_iso)
     export_status: ProcessingStatus = ProcessingStatus.COMPLETED
     is_favorite: bool = False
+    export_kind: ExportClipKind = ExportClipKind.RAW
+    source_clip_id: str | None = None
+    caption_style_preset: str | None = None
 
 
 class ClipExportsDocument(BaseModel):

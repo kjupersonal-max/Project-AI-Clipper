@@ -85,6 +85,7 @@ def _run_command(
     command: list[str],
     *,
     timeout_seconds: int,
+    cwd: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
@@ -94,6 +95,7 @@ def _run_command(
             timeout=timeout_seconds,
             check=False,
             shell=False,
+            cwd=cwd,
         )
     except FileNotFoundError as exc:
         binary = command[0]

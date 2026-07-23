@@ -5,11 +5,14 @@ import type { ExportClipResponse } from "@/lib/api/projects";
 import { resolveMediaUrl } from "@/lib/api/projects";
 import { Badge } from "@/components/ui/Badge";
 import {
+  canEditClipCaptions,
   defaultExportedClipSort,
   filterAndSortExportedClips,
   getClipDisplayName,
+  isCaptionedExport,
   type ExportedClipSort,
 } from "@/lib/exported-clips-library";
+import { getCaptionedExportLabel } from "@/lib/caption-render-mapping";
 import { cn, formatDuration, formatFileSize } from "@/lib/utils";
 import {
   CheckCircle2,
@@ -237,7 +240,14 @@ function ExportedClipCard({
             </div>
           ) : (
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-zinc-100">{displayName}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm font-medium text-zinc-100">{displayName}</p>
+                {isCaptionedExport(clip) ? (
+                  <Badge className="border-violet-500/30 bg-violet-500/10 text-violet-100">
+                    {getCaptionedExportLabel(clip) ?? "Captioned"}
+                  </Badge>
+                ) : null}
+              </div>
               <p className="mt-1 font-mono text-xs text-zinc-500">{clip.filename}</p>
             </div>
           )}
@@ -371,10 +381,15 @@ function ExportedClipCard({
             <button
               type="button"
               onClick={() => onCaptions(clip)}
-              disabled={isBusy || isEditing}
+              disabled={isBusy || isEditing || !canEditClipCaptions(clip)}
+              title={
+                canEditClipCaptions(clip)
+                  ? "Edit captions"
+                  : "Captioned exports cannot be re-captioned. Edit captions on the source clip."
+              }
               className={cn(
                 "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/5 px-3 text-xs font-medium text-sky-100 transition-colors hover:bg-sky-500/10",
-                (isBusy || isEditing) && "cursor-not-allowed opacity-60",
+                (isBusy || isEditing || !canEditClipCaptions(clip)) && "cursor-not-allowed opacity-60",
               )}
             >
               <Subtitles className="h-3.5 w-3.5" />

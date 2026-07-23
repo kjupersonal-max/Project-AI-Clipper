@@ -48,6 +48,13 @@ from app.services.clip_selection import (
     load_project_clip_candidates,
     select_project_clips,
 )
+from app.services.caption_render import (
+    CaptionRenderInProgressError,
+    CaptionRenderProcessError,
+    CaptionRenderValidationError,
+    format_caption_render_error_detail,
+    render_project_clip_captions,
+)
 from app.services.clip_captions import (
     ClipCaptionsGenerationError,
     ClipCaptionsNotFoundError,
@@ -451,6 +458,55 @@ def reset_project_clip_caption_style(
         raise HTTPException(status_code=404, detail=exc.message) from exc
     except ClipCaptionsValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.message) from exc
+
+
+@router.post(
+    "/{project_id}/clips/{clip_id}/captions/render",
+    response_model=ExportClipResponse,
+)
+def render_project_clip_captioned_export(
+    project_id: str,
+    clip_id: str,
+) -> ExportClipResponse:
+    validate_project_id(project_id)
+    project = load_project(project_id)
+
+    project.append_log(f"Caption render started for clip {clip_id}.")
+    save_project(project)
+
+    try:
+        response = render_project_clip_captions(project_id, clip_id)
+        project = load_project(project_id)
+        project.append_log(
+            f"Caption render completed for clip {clip_id} -> {response.clip_id} ({response.filename})."
+        )
+        project.last_error = None
+        save_project(project)
+        return response
+    except ClipExportNotFoundError as exc:
+        project = load_project(project_id)
+        project.last_error = exc.message
+        project.append_log(f"Caption render failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except CaptionRenderValidationError as exc:
+        project = load_project(project_id)
+        project.last_error = exc.message
+        project.append_log(f"Caption render failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+    except CaptionRenderInProgressError as exc:
+        project = load_project(project_id)
+        project.last_error = exc.message
+        save_project(project)
+        raise HTTPException(status_code=409, detail=exc.message) from exc
+    except CaptionRenderProcessError as exc:
+        project = load_project(project_id)
+        detail = format_caption_render_error_detail(exc)
+        project.last_error = detail
+        project.append_log(f"Caption render failed: {detail}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=500, detail=detail) from exc
 
 
 @router.post("/{project_id}/inspect", response_model=InspectResponse)

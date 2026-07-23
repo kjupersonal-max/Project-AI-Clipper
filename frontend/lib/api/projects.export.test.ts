@@ -9,6 +9,7 @@ import {
   generateProjectClipCaptions,
   renameProjectClip,
   resetProjectClipCaptionStyle,
+  renderProjectClipCaptions,
   resolveMediaUrl,
   trimProjectClip,
   updateProjectClipCaptionStyle,
@@ -515,5 +516,39 @@ describe("clip caption API helpers", () => {
       "http://localhost:8000/api/projects/project-1/clips/clip-1/captions/style/reset",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("renders captioned exports", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        clip_id: "clip-captioned",
+        project_id: "project-1",
+        filename: "clip_captioned.mp4",
+        relative_path: "project-1/clips/clip_captioned.mp4",
+        media_url: "/api/projects/project-1/media/clips/clip-captioned",
+        start_time: 0,
+        end_time: 5,
+        duration: 5,
+        file_size_bytes: 1000,
+        candidate_id: null,
+        clip_name: "Clip (captioned)",
+        created_at: "2026-07-22T18:00:00Z",
+        export_status: "completed",
+        is_favorite: false,
+        export_kind: "captioned",
+        source_clip_id: "clip-1",
+        caption_style_preset: "clean-minimal",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await renderProjectClipCaptions("project-1", "clip-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/api/projects/project-1/clips/clip-1/captions/render",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(result.export_kind).toBe("captioned");
   });
 });
