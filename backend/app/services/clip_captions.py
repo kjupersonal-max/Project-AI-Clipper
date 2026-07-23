@@ -170,7 +170,9 @@ def _validate_caption_segments(segments: list[CaptionSegment], clip_duration: fl
 
 
 def _default_caption_style() -> CaptionStyle:
-    return CaptionStyle()
+    from app.services.caption_presets import get_default_caption_style
+
+    return get_default_caption_style()
 
 
 def _resolve_caption_style(document: ClipCaptionsDocument) -> CaptionStyle:

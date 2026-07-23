@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     clip_captions_subdir: str = "captions"
     clip_exports_manifest_filename: str = "exports.json"
     clip_export_timeout_seconds: int = 600
+    caption_presets_subdir: str = "caption_presets"
+    caption_presets_store_filename: str = "custom_presets.json"
     expose_detailed_render_errors: bool = True
     caption_ass_debug_logging: bool = True
 

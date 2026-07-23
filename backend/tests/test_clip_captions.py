@@ -420,7 +420,7 @@ def test_default_caption_style_on_generation(sample_project, temp_backend_dirs):
 
     response = generate_clip_captions(sample_project["project_id"], exported.clip_id)
 
-    assert response.style.preset_id == CaptionStylePresetId.CLEAN_MINIMAL
+    assert response.style.preset_id == CaptionStylePresetId.CUSTOM
     assert response.style.font_size == pytest.approx(22.0)
     assert response.style.animation_type == CaptionAnimationType.FADE
 
@@ -491,7 +491,8 @@ def test_backwards_compatible_captions_without_style(sample_project, temp_backen
     reloaded = get_clip_captions(sample_project["project_id"], exported.clip_id)
 
     assert reloaded.segments[0].id == generated.segments[0].id
-    assert reloaded.style.preset_id == CaptionStylePresetId.CLEAN_MINIMAL
+    assert reloaded.style.preset_id == CaptionStylePresetId.CUSTOM
+    assert reloaded.style.font_size == pytest.approx(22.0)
 
 
 def test_reset_caption_style(sample_project, temp_backend_dirs):
@@ -507,7 +508,7 @@ def test_reset_caption_style(sample_project, temp_backend_dirs):
 
     reset = reset_clip_caption_style(sample_project["project_id"], exported.clip_id)
 
-    assert reset.style.preset_id == CaptionStylePresetId.CLEAN_MINIMAL
+    assert reset.style.preset_id == CaptionStylePresetId.CUSTOM
     assert reset.style.font_size == pytest.approx(22.0)
     assert len(reset.segments) >= 1
 

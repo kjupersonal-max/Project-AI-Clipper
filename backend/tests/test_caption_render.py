@@ -186,7 +186,7 @@ def test_successful_captioned_render(sample_project, temp_backend_dirs):
     assert rendered.source_clip_id == exported.clip_id
     assert rendered.clip_id != exported.clip_id
     assert "(captioned)" in (rendered.clip_name or "")
-    assert rendered.caption_style_preset == "clean-minimal"
+    assert rendered.caption_style_preset == "custom"
 
     _, reloaded_source = locate_exported_clip(sample_project["project_id"], exported.clip_id)
     assert reloaded_source.stat().st_size == original_size

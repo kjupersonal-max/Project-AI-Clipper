@@ -1,0 +1,60 @@
+{
+  "project_id": "4197168d-ceec-47b5-a181-7719c396bc99",
+  "candidate_count": 2,
+  "min_duration_seconds": 15.0,
+  "max_duration_seconds": 60.0,
+  "max_gap_seconds": 2.5,
+  "max_candidates": 10,
+  "source_duration_seconds": 120.042917,
+  "candidates": [
+    {
+      "clip_id": "48a2f119-d97a-4a9a-ba4d-09cfa1375dee",
+      "start": 0.0,
+      "end": 15.96,
+      "duration": 15.96,
+      "segment_ids": [
+        1,
+        2,
+        3
+      ],
+      "transcript_text": "I don't know if you put your crosshair, if you put your crosshair in your user name, but you got to be kind of done. I literally do that because I like switch computers sometimes, I go to like a gaming like area. I need my concerto to play.",
+      "score": 54.8,
+      "confidence": 0.55,
+      "primary_emotion": "humorous",
+      "hook_score": 3.0,
+      "payoff_score": 0.3,
+      "standalone_score": 3.7,
+      "context_dependency_score": 2.0,
+      "title_suggestion": "I don't know if you put your crosshair, if you put your cross...",
+      "reason": "Grouped 3 nearby strong segments into a humorous clip with balanced segment engagement. Hook 3.0/10, payoff 0.3/10, standalone 3.7/10, context dependency 2.0/10.",
+      "status": "proposed"
+    },
+    {
+      "clip_id": "f1e1fff2-2bc2-4973-9b5c-344c0e69cbc9",
+      "start": 92.04,
+      "end": 107.74,
+      "duration": 15.7,
+      "segment_ids": [
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32
+      ],
+      "transcript_text": "Wait, that's not fair. We have questions. You can actually leave you like. Wait, you guys realize that this question is on the three fourth. No, the question was over beta with. Oh, my God. Holy shit.",
+      "score": 41.0,
+      "confidence": 0.35,
+      "primary_emotion": "informative",
+      "hook_score": 1.2,
+      "payoff_score": 2.1,
+      "standalone_score": 3.0,
+      "context_dependency_score": 4.4,
+      "title_suggestion": "Wait, that's not fair.",
+      "reason": "Grouped 7 nearby strong segments into a informative clip with excitement 6.0/10. Hook 1.2/10, payoff 2.1/10, standalone 3.0/10, context dependency 4.4/10.",
+      "status": "proposed"
+    }
+  ],
+  "created_at": "2026-07-23T02:17:45.752184+00:00"
+}

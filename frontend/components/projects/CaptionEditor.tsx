@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CaptionPresetPanel } from "@/components/projects/CaptionPresetPanel";
 import { CaptionPreviewOverlay } from "@/components/projects/CaptionPreviewOverlay";
 import { CaptionStylePanel, cloneCaptionStyle } from "@/components/projects/CaptionStylePanel";
 import type { ClipCaptionsResponse, ExportClipResponse } from "@/lib/api/projects";
@@ -372,7 +373,18 @@ export function CaptionEditor({
             </div>
 
             {editorTab === "style" ? (
-              <CaptionStylePanel
+              <div className="flex flex-col gap-4">
+                <CaptionPresetPanel
+                  currentStyle={captionStyle}
+                  disabled={isBusy}
+                  onApplyStyle={(style) => {
+                    setCaptionStyle(style);
+                    setStyleDirty(!stylesEqual(style, captions?.style ?? createDefaultCaptionStyle()));
+                    setShowSafeAreaGuides(style.safe_area_mode !== "none");
+                  }}
+                  onError={setLocalError}
+                />
+                <CaptionStylePanel
                 style={captionStyle}
                 dirty={styleDirty}
                 saving={styleSaving}
@@ -384,6 +396,7 @@ export function CaptionEditor({
                 onSave={() => void handleSaveStyle()}
                 onReset={() => void handleResetStyle()}
               />
+              </div>
             ) : (
               <div className="flex min-h-[24rem] flex-col rounded-lg border border-zinc-800 bg-zinc-950/60">
                 <div className="flex flex-wrap items-center gap-2 border-b border-zinc-800 px-4 py-3">
