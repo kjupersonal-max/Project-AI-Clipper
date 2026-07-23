@@ -10,6 +10,7 @@ from app.models.project import (
     ExportClipRequest,
     ExportClipResponse,
     FavoriteClipRequest,
+    TrimClipRequest,
     ExtractAudioResponse,
     InspectResponse,
     ProcessingStatus,
@@ -53,6 +54,7 @@ from app.services.clip_export import (
     list_project_clip_exports,
     locate_exported_clip,
     rename_project_clip,
+    trim_project_clip,
 )
 from app.services.timeline_analysis import (
     AnalysisNotFoundError,
@@ -202,6 +204,63 @@ def rename_project_exported_clip(
     except ClipExportValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.message) from exc
     except ClipExportProcessError as exc:
+        raise HTTPException(status_code=500, detail=exc.message) from exc
+
+
+@router.post(
+    "/{project_id}/clips/{clip_id}/trim",
+    response_model=ExportClipResponse,
+)
+def trim_project_exported_clip(
+    project_id: str,
+    clip_id: str,
+    request: TrimClipRequest,
+) -> ExportClipResponse:
+    validate_project_id(project_id)
+    project = load_project(project_id)
+
+    project.append_log(
+        f"Clip trim started from {clip_id} ({request.start_time:.3f}s to {request.end_time:.3f}s)."
+    )
+    save_project(project)
+
+    try:
+        response = trim_project_clip(
+            project_id,
+            clip_id,
+            start_time=request.start_time,
+            end_time=request.end_time,
+            clip_name=request.clip_name,
+        )
+        project = load_project(project_id)
+        project.append_log(f"Clip trim completed: {response.filename} ({response.clip_id}).")
+        project.last_error = None
+        save_project(project)
+        return response
+    except HTTPException as exc:
+        project = load_project(project_id)
+        detail = exc.detail if isinstance(exc.detail, str) else "Clip trim failed."
+        project.last_error = detail
+        project.append_log(f"Clip trim failed: {detail}", level="error")
+        save_project(project)
+        raise
+    except ClipExportNotFoundError as exc:
+        project = load_project(project_id)
+        project.last_error = exc.message
+        project.append_log(f"Clip trim failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipExportValidationError as exc:
+        project = load_project(project_id)
+        project.last_error = exc.message
+        project.append_log(f"Clip trim failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+    except ClipExportProcessError as exc:
+        project = load_project(project_id)
+        project.last_error = exc.message
+        project.append_log(f"Clip trim failed: {exc.message}", level="error")
+        save_project(project)
         raise HTTPException(status_code=500, detail=exc.message) from exc
 
 

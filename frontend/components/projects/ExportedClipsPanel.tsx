@@ -18,6 +18,7 @@ import {
   Film,
   Loader2,
   Pencil,
+  Scissors,
   Search,
   Star,
   Trash2,
@@ -39,6 +40,7 @@ type ExportedClipsPanelProps = {
   onRename?: (clipId: string, clipName: string) => Promise<void>;
   onDelete?: (clipId: string) => Promise<void>;
   onFavorite?: (clipId: string, isFavorite: boolean) => Promise<void>;
+  onEdit?: (clip: ExportClipResponse) => void;
 };
 
 const SORT_OPTIONS: { value: ExportedClipSort; label: string }[] = [
@@ -88,6 +90,7 @@ type ExportedClipCardProps = {
   onRename?: (clipId: string, clipName: string) => Promise<void>;
   onDelete?: (clipId: string) => Promise<void>;
   onFavorite?: (clipId: string, isFavorite: boolean) => Promise<void>;
+  onEdit?: (clip: ExportClipResponse) => void;
 };
 
 function ExportedClipCard({
@@ -96,6 +99,7 @@ function ExportedClipCard({
   onRename,
   onDelete,
   onFavorite,
+  onEdit,
 }: ExportedClipCardProps) {
   const mediaUrl = resolveMediaUrl(clip.media_url);
   const displayName = getClipDisplayName(clip);
@@ -345,6 +349,20 @@ function ExportedClipCard({
           Rendered MP4 ready for download or preview.
         </p>
         <div className="flex flex-wrap items-center gap-2">
+          {onEdit ? (
+            <button
+              type="button"
+              onClick={() => onEdit(clip)}
+              disabled={isBusy || isEditing}
+              className={cn(
+                "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 text-xs font-medium text-emerald-100 transition-colors hover:bg-emerald-500/10",
+                (isBusy || isEditing) && "cursor-not-allowed opacity-60",
+              )}
+            >
+              <Scissors className="h-3.5 w-3.5" />
+              Edit
+            </button>
+          ) : null}
           {onRename ? (
             <button
               type="button"
@@ -426,6 +444,7 @@ export function ExportedClipsPanel({
   onRename,
   onDelete,
   onFavorite,
+  onEdit,
 }: ExportedClipsPanelProps) {
   const [clipActions, setClipActions] = useState<Record<string, ClipActionState>>({});
   const [searchQuery, setSearchQuery] = useState("");
@@ -619,6 +638,7 @@ export function ExportedClipsPanel({
               onRename={onRename ? handleRename : undefined}
               onDelete={onDelete ? handleDelete : undefined}
               onFavorite={onFavorite ? handleFavorite : undefined}
+              onEdit={onEdit}
             />
           ))}
         </div>

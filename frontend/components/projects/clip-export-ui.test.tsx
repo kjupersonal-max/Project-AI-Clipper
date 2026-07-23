@@ -769,4 +769,41 @@ describe("ExportedClipsPanel", () => {
     expect(screen.getByText("First Clip")).toBeInTheDocument();
     expect(screen.queryByText("Second Clip")).not.toBeInTheDocument();
   });
+
+  it("shows edit button when onEdit is provided", async () => {
+    const user = userEvent.setup();
+    const onEdit = vi.fn();
+
+    render(
+      <ExportedClipsPanel
+        exportedClips={[exportedClip]}
+        onEdit={onEdit}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    expect(onEdit).toHaveBeenCalledWith(exportedClip);
+  });
+
+  it("keeps trimmed clip visible in search and sort views", () => {
+    const trimmedClip: ExportClipResponse = {
+      ...exportedClip,
+      clip_id: "clip-trimmed",
+      clip_name: "Sample clip title (trimmed)",
+      filename: "sample-clip-title_trimmed.mp4",
+      start_time: 12,
+      end_time: 20,
+      duration: 8,
+      created_at: "2026-07-22T19:00:00Z",
+    };
+
+    render(
+      <ExportedClipsPanel
+        exportedClips={[exportedClip, trimmedClip]}
+      />,
+    );
+
+    expect(screen.getByText("Sample clip title (trimmed)")).toBeInTheDocument();
+    expect(screen.getByText("sample-clip-title_trimmed.mp4")).toBeInTheDocument();
+  });
 });

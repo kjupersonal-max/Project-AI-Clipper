@@ -15,6 +15,7 @@ import {
   inspectProject,
   renameProjectClip,
   selectProjectClips,
+  trimProjectClip,
   transcribeProject,
   type AnalysisDocument,
   type ApiError,
@@ -37,6 +38,7 @@ import {
   ExportedClipsPanel,
   ExportedClipsSummary,
 } from "@/components/projects/ExportedClipsPanel";
+import { ClipEditor } from "@/components/projects/ClipEditor";
 import {
   TimelineAnalysisPanel,
   TimelineAnalysisState,
@@ -133,6 +135,9 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
   const [exportedClips, setExportedClips] = useState<ExportClipResponse[]>([]);
   const [exportedClipsLoading, setExportedClipsLoading] = useState(false);
   const [exportedClipsError, setExportedClipsError] = useState<string | null>(null);
+  const [editingClip, setEditingClip] = useState<ExportClipResponse | null>(null);
+  const [trimSaving, setTrimSaving] = useState(false);
+  const [trimError, setTrimError] = useState<string | null>(null);
   const [exportStates, setExportStates] = useState<Record<string, CandidateExportState>>({});
   const [exportedCandidateIds, setExportedCandidateIds] = useState<Set<string>>(
     () => new Set(),
@@ -439,6 +444,57 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
       }
     },
     [exportStates, exportedCandidateIds, exportedClips, projectId],
+  );
+
+  const handleEditExportedClip = useCallback((clip: ExportClipResponse) => {
+    setTrimError(null);
+    setEditingClip(clip);
+  }, []);
+
+  const handleCloseClipEditor = useCallback(() => {
+    if (trimSaving) {
+      return;
+    }
+    setEditingClip(null);
+    setTrimError(null);
+  }, [trimSaving]);
+
+  const handleSaveTrimmedClip = useCallback(
+    async ({
+      startTime,
+      endTime,
+      clipName,
+    }: {
+      startTime: number;
+      endTime: number;
+      clipName: string;
+    }) => {
+      if (!editingClip) {
+        return;
+      }
+
+      setTrimSaving(true);
+      setTrimError(null);
+
+      try {
+        const trimmed = await trimProjectClip(projectId, editingClip.clip_id, {
+          start_time: startTime,
+          end_time: endTime,
+          clip_name: clipName,
+        });
+        setExportedClips((current) => mergeExportedClips([trimmed], current));
+        setEditingClip(null);
+      } catch (error) {
+        const message =
+          error && typeof error === "object" && "message" in error
+            ? String((error as ApiError).message)
+            : "Unable to save trimmed clip.";
+        setTrimError(message);
+      } finally {
+        setTrimSaving(false);
+      }
+    },
+    [editingClip, projectId],
   );
 
   const loadProject = useCallback(async () => {
@@ -1111,9 +1167,22 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
             onRename={handleRenameExportedClip}
             onDelete={handleDeleteExportedClip}
             onFavorite={handleFavoriteExportedClip}
+            onEdit={handleEditExportedClip}
           />
         </CardContent>
       </Card>
+
+      {editingClip ? (
+        <ClipEditor
+          clip={editingClip}
+          sourceVideoUrl={getProjectVideoUrl(projectId)}
+          frameRate={project.video_metadata?.frame_rate ?? null}
+          saving={trimSaving}
+          error={trimError}
+          onSave={handleSaveTrimmedClip}
+          onClose={handleCloseClipEditor}
+        />
+      ) : null}
 
       <Card>
         <CardHeader title="Processing Activity Log" />

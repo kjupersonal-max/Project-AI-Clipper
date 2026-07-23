@@ -22,6 +22,7 @@ from app.services.clip_export import (
     list_project_clip_exports,
     rename_project_clip,
     sanitize_clip_name,
+    trim_project_clip,
 )
 from app.services.project_store import load_project, save_project
 from app.services.video_processing import FFmpegNotAvailableError
@@ -324,6 +325,27 @@ def _export_clip(
     ):
         return export_project_clip(
             sample_project["project_id"],
+            start_time=start_time,
+            end_time=end_time,
+            clip_name=clip_name,
+        )
+
+
+def _trim_clip(
+    sample_project,
+    source_clip_id: str,
+    *,
+    start_time: float,
+    end_time: float,
+    clip_name: str | None = None,
+):
+    with patch(
+        "app.services.clip_export._run_command",
+        side_effect=_fake_ffmpeg_run_factory(),
+    ):
+        return trim_project_clip(
+            sample_project["project_id"],
+            source_clip_id,
             start_time=start_time,
             end_time=end_time,
             clip_name=clip_name,
@@ -919,3 +941,228 @@ def test_favorite_clip_endpoint(sample_project, temp_backend_dirs):
     body = response.json()
     assert body["clip_id"] == exported.clip_id
     assert body["is_favorite"] is True
+
+
+def test_trim_clip_success(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    parent = _export_clip(
+        sample_project,
+        start_time=1.0,
+        end_time=5.0,
+        clip_name="Parent Clip",
+    )
+
+    trimmed = _trim_clip(
+        sample_project,
+        parent.clip_id,
+        start_time=2.0,
+        end_time=4.0,
+        clip_name="Trimmed Clip",
+    )
+
+    assert trimmed.clip_id != parent.clip_id
+    assert trimmed.start_time == pytest.approx(2.0)
+    assert trimmed.end_time == pytest.approx(4.0)
+    assert trimmed.duration == pytest.approx(2.0)
+    assert trimmed.clip_name == "Trimmed Clip"
+    assert trimmed.candidate_id == parent.candidate_id
+    assert trimmed.is_favorite is False
+
+    manifest_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / "exports.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert len(manifest["exports"]) == 2
+
+    parent_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / parent.filename
+    )
+    trimmed_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / trimmed.filename
+    )
+    assert parent_path.exists()
+    assert trimmed_path.exists()
+    assert parent_path.read_bytes() != trimmed_path.read_bytes() or parent.filename != trimmed.filename
+
+
+def test_trim_clip_invalid_timestamps_before_parent_start(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    parent = _export_clip(
+        sample_project,
+        start_time=2.0,
+        end_time=5.0,
+        clip_name="Parent Clip",
+    )
+
+    with pytest.raises(ClipExportValidationError, match="cannot be earlier"):
+        trim_project_clip(
+            sample_project["project_id"],
+            parent.clip_id,
+            start_time=1.0,
+            end_time=4.0,
+        )
+
+
+def test_trim_clip_end_before_start(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    parent = _export_clip(
+        sample_project,
+        start_time=1.0,
+        end_time=5.0,
+        clip_name="Parent Clip",
+    )
+
+    with pytest.raises(ClipExportValidationError, match="greater than start_time"):
+        trim_project_clip(
+            sample_project["project_id"],
+            parent.clip_id,
+            start_time=4.0,
+            end_time=3.0,
+        )
+
+
+def test_trim_clip_zero_length(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    parent = _export_clip(
+        sample_project,
+        start_time=1.0,
+        end_time=5.0,
+        clip_name="Parent Clip",
+    )
+
+    with pytest.raises(ClipExportValidationError, match="greater than start_time"):
+        trim_project_clip(
+            sample_project["project_id"],
+            parent.clip_id,
+            start_time=3.0,
+            end_time=3.0,
+        )
+
+
+def test_trim_clip_missing_clip(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    _export_clip(
+        sample_project,
+        start_time=1.0,
+        end_time=5.0,
+        clip_name="Parent Clip",
+    )
+    missing_clip_id = str(uuid.uuid4())
+
+    with pytest.raises(ClipExportNotFoundError, match="was not found"):
+        trim_project_clip(
+            sample_project["project_id"],
+            missing_clip_id,
+            start_time=2.0,
+            end_time=4.0,
+        )
+
+
+def test_trim_clip_manifest_creation(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    parent = _export_clip(
+        sample_project,
+        start_time=0.0,
+        end_time=3.0,
+        clip_name="Manifest Parent",
+    )
+
+    trimmed = _trim_clip(
+        sample_project,
+        parent.clip_id,
+        start_time=0.5,
+        end_time=2.5,
+    )
+
+    manifest_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / "exports.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    clip_ids = {record["clip_id"] for record in manifest["exports"]}
+    assert clip_ids == {parent.clip_id, trimmed.clip_id}
+
+
+def test_trim_clip_original_preserved(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    parent = _export_clip(
+        sample_project,
+        start_time=1.0,
+        end_time=6.0,
+        clip_name="Original Clip",
+    )
+
+    parent_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / parent.filename
+    )
+    original_bytes = parent_path.read_bytes()
+    original_manifest_entry = {
+        "clip_id": parent.clip_id,
+        "clip_name": parent.clip_name,
+        "filename": parent.filename,
+        "start_time": parent.start_time,
+        "end_time": parent.end_time,
+    }
+
+    _trim_clip(
+        sample_project,
+        parent.clip_id,
+        start_time=2.0,
+        end_time=4.0,
+    )
+
+    assert parent_path.read_bytes() == original_bytes
+
+    manifest_path = (
+        temp_backend_dirs["processed_dir"]
+        / sample_project["project_id"]
+        / "clips"
+        / "exports.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    preserved = next(record for record in manifest["exports"] if record["clip_id"] == parent.clip_id)
+    assert preserved["clip_name"] == original_manifest_entry["clip_name"]
+    assert preserved["filename"] == original_manifest_entry["filename"]
+    assert preserved["start_time"] == original_manifest_entry["start_time"]
+    assert preserved["end_time"] == original_manifest_entry["end_time"]
+
+
+def test_trim_clip_endpoint(sample_project, temp_backend_dirs):
+    _set_video_metadata(sample_project)
+    parent = _export_clip(
+        sample_project,
+        start_time=1.0,
+        end_time=5.0,
+        clip_name="Endpoint Parent",
+    )
+    client = TestClient(app)
+
+    with patch(
+        "app.services.clip_export._run_command",
+        side_effect=_fake_ffmpeg_run_factory(),
+    ):
+        response = client.post(
+            f"/api/projects/{sample_project['project_id']}/clips/{parent.clip_id}/trim",
+            json={"start_time": 2.0, "end_time": 4.0, "clip_name": "Endpoint Trimmed"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["clip_id"] != parent.clip_id
+    assert body["clip_name"] == "Endpoint Trimmed"
+    assert body["start_time"] == pytest.approx(2.0)
+    assert body["end_time"] == pytest.approx(4.0)

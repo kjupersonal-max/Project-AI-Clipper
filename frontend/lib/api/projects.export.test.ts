@@ -6,6 +6,7 @@ import {
   fetchProjectClipExports,
   renameProjectClip,
   resolveMediaUrl,
+  trimProjectClip,
 } from "@/lib/api/projects";
 
 describe("exportProjectClip", () => {
@@ -243,6 +244,57 @@ describe("deleteProjectClip", () => {
       message: "Exported clip 'clip-1' was not found.",
       status: 404,
     });
+  });
+});
+
+describe("trimProjectClip", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("posts trim values to the backend", async () => {
+    const mockResponse = {
+      clip_id: "clip-trimmed",
+      project_id: "project-1",
+      filename: "trimmed.mp4",
+      relative_path: "project-1/clips/trimmed.mp4",
+      media_url: "/api/projects/project-1/media/clips/clip-trimmed",
+      start_time: 12,
+      end_time: 20,
+      duration: 8,
+      file_size_bytes: 900,
+      candidate_id: "candidate-123",
+      clip_name: "Sample clip (trimmed)",
+      created_at: "2026-07-22T18:10:00Z",
+      export_status: "completed",
+      is_favorite: false,
+    };
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockResponse,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await trimProjectClip("project-1", "clip-1", {
+      start_time: 12,
+      end_time: 20,
+      clip_name: "Sample clip (trimmed)",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/api/projects/project-1/clips/clip-1/trim",
+      expect.objectContaining({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          start_time: 12,
+          end_time: 20,
+          clip_name: "Sample clip (trimmed)",
+        }),
+      }),
+    );
+    expect(result).toEqual(mockResponse);
   });
 });
 

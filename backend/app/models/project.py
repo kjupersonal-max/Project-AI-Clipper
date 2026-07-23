@@ -277,6 +277,12 @@ class FavoriteClipRequest(BaseModel):
     is_favorite: bool
 
 
+class TrimClipRequest(BaseModel):
+    start_time: float = Field(ge=0.0)
+    end_time: float = Field(gt=0.0)
+    clip_name: str | None = None
+
+
 class DeleteClipResponse(BaseModel):
     project_id: str
     clip_id: str

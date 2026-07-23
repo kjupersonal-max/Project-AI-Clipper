@@ -421,6 +421,67 @@ def favorite_project_clip(
     return _record_to_export_response(project_id, record)
 
 
+def _validate_trim_times_against_parent(
+    *,
+    start_time: float,
+    end_time: float,
+    parent: ExportedClipRecord,
+) -> None:
+    if start_time < parent.start_time:
+        raise ClipExportValidationError(
+            f"start_time ({start_time:.3f}s) cannot be earlier than the source clip "
+            f"start ({parent.start_time:.3f}s)."
+        )
+
+    if end_time > parent.end_time:
+        raise ClipExportValidationError(
+            f"end_time ({end_time:.3f}s) cannot be later than the source clip "
+            f"end ({parent.end_time:.3f}s)."
+        )
+
+
+def trim_project_clip(
+    project_id: str,
+    source_clip_id: str,
+    *,
+    start_time: float,
+    end_time: float,
+    clip_name: str | None = None,
+) -> ExportClipResponse:
+    load_project(project_id)
+    parent_record, parent_path = locate_exported_clip(project_id, source_clip_id)
+    original_parent_size = parent_path.stat().st_size
+    original_parent_filename = parent_record.filename
+
+    _validate_trim_times_against_parent(
+        start_time=start_time,
+        end_time=end_time,
+        parent=parent_record,
+    )
+
+    trimmed_name = clip_name
+    if trimmed_name is None:
+        parent_label = parent_record.clip_name or parent_record.filename.replace(".mp4", "")
+        trimmed_name = f"{parent_label} (trimmed)"
+
+    response = export_project_clip(
+        project_id,
+        start_time=start_time,
+        end_time=end_time,
+        clip_name=trimmed_name,
+        candidate_id=parent_record.candidate_id,
+    )
+
+    _, reloaded_parent_path = locate_exported_clip(project_id, source_clip_id)
+    if (
+        reloaded_parent_path.stat().st_size != original_parent_size
+        or reloaded_parent_path.name != original_parent_filename
+    ):
+        raise ClipExportProcessError("Source clip was modified unexpectedly during trim.")
+
+    return response
+
+
 def delete_project_clip(project_id: str, clip_id: str) -> ExportedClipRecord:
     load_project(project_id)
 

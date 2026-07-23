@@ -232,6 +232,12 @@ export type FavoriteClipRequest = {
   is_favorite: boolean;
 };
 
+export type TrimClipRequest = {
+  start_time: number;
+  end_time: number;
+  clip_name?: string | null;
+};
+
 export type DeleteClipResponse = {
   project_id: string;
   clip_id: string;
@@ -462,6 +468,29 @@ export async function favoriteProjectClip(
     `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/favorite`,
     {
       method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    },
+  );
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<ExportClipResponse>;
+}
+
+export async function trimProjectClip(
+  projectId: string,
+  clipId: string,
+  request: TrimClipRequest,
+): Promise<ExportClipResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/trim`,
+    {
+      method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
