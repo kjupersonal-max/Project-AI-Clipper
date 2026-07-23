@@ -116,6 +116,11 @@ function ClipCandidateCard({
     candidate.selection_reasons && candidate.selection_reasons.length > 0
       ? candidate.selection_reasons
       : [candidate.reason];
+  const visualContribution = candidate.score_breakdown?.visual_contribution ?? 0;
+  const hasMeaningfulVisual =
+    (candidate.visual_evidence?.visual_contribution ?? 0) !== 0 ||
+    (candidate.visual_evidence?.measured_signals?.length ?? 0) > 0 ||
+    Math.abs(visualContribution) >= 0.5;
 
   return (
     <div className="overflow-hidden rounded-lg border border-amber-500/30 bg-zinc-950/50 ring-1 ring-amber-500/10">
@@ -188,6 +193,33 @@ function ClipCandidateCard({
               <ImportancePill label="Monetize" value={importance.monetization_potential} />
             </div>
           </details>
+        ) : null}
+
+        {hasMeaningfulVisual ? (
+          <div className="rounded-md border border-violet-500/20 bg-violet-500/5 px-3 py-2">
+            <p className="text-[10px] uppercase tracking-wider text-violet-300/80">
+              Visual evidence
+            </p>
+            {visualContribution !== 0 ? (
+              <p className="mt-1 text-xs text-violet-100/90">
+                Score contribution: {visualContribution > 0 ? "+" : ""}
+                {visualContribution.toFixed(1)}
+                {candidate.score_breakdown?.transcript_only_score != null ? (
+                  <span className="text-zinc-500">
+                    {" "}
+                    (transcript {candidate.score_breakdown.transcript_only_score.toFixed(1)} → combined{" "}
+                    {candidate.score.toFixed(1)})
+                  </span>
+                ) : null}
+              </p>
+            ) : null}
+            {candidate.visual_evidence?.measured_signals &&
+            candidate.visual_evidence.measured_signals.length > 0 ? (
+              <p className="mt-1 text-xs text-violet-100/80">
+                Signals: {candidate.visual_evidence.measured_signals.join(", ")}
+              </p>
+            ) : null}
+          </div>
         ) : null}
 
         {candidate.warnings && candidate.warnings.length > 0 ? (

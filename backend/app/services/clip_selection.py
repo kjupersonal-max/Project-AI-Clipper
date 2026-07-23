@@ -52,6 +52,8 @@ from app.services.transcription import (
     load_project_transcript,
 )
 from app.services.transcript_store import load_workflow_transcript
+from app.services.visual_analysis import try_load_project_visual_analysis
+from app.services.visual_scoring import apply_visual_scoring, should_apply_visual_boundaries
 
 logger = logging.getLogger(__name__)
 
@@ -857,6 +859,34 @@ def _rank_seed_groups(groups: list[list[SegmentAnalysis]]) -> list[list[SegmentA
     return sorted(groups, key=_group_strength, reverse=True)
 
 
+def _select_construction_seed_groups(
+    groups: list[list[SegmentAnalysis]],
+    source_duration: float,
+) -> list[list[SegmentAnalysis]]:
+    ranked = _rank_seed_groups(groups)
+    cap = max(1, settings.clip_selection_max_seed_groups)
+    selected: list[list[SegmentAnalysis]] = []
+    seen_starts: set[float] = set()
+
+    def add_group(group: list[SegmentAnalysis]) -> None:
+        key = round(group[0].start, 2)
+        if key in seen_starts:
+            return
+        seen_starts.add(key)
+        selected.append(group)
+
+    for group in ranked[:cap]:
+        add_group(group)
+
+    opening_threshold = settings.clip_selection_opening_coverage_seconds
+    opening_groups = [group for group in ranked if group[0].start <= opening_threshold]
+    if opening_groups:
+        earliest_opening = min(opening_groups, key=lambda group: group[0].start)
+        add_group(earliest_opening)
+
+    return selected
+
+
 def _duration_classes_for_selection(
     group: list[SegmentAnalysis],
     source_duration: float,
@@ -965,6 +995,7 @@ def _refine_final_candidate_boundaries(
     source_duration: float,
     max_gap_seconds: float,
     context_padding_seconds: float,
+    visual_document=None,
 ) -> ClipCandidate:
     by_id = _ordered_segments_by_id(analysis_segments)
     core_segments = [
@@ -985,6 +1016,7 @@ def _refine_final_candidate_boundaries(
         min_tail_seconds=settings.clip_selection_post_payoff_tail_min_seconds,
         max_tail_seconds=settings.clip_selection_post_payoff_tail_max_seconds,
         max_lead_in_seconds=settings.clip_selection_lead_in_max_seconds,
+        visual_document=visual_document,
     )
     try:
         refined_segments = _validate_candidate_segments(
@@ -1003,14 +1035,15 @@ def _refine_final_candidate_boundaries(
 
     warnings = list(candidate.warnings)
     for adjustment in refinement.adjustments:
-        if adjustment.direction == "end":
-            warnings.append(
+        message = adjustment.reason
+        if adjustment.direction == "end" and "Extended" not in message:
+            message = (
                 f"Extended end by {adjustment.seconds:.1f}s for a natural completion after the payoff."
             )
-        elif adjustment.direction == "start":
-            warnings.append(
-                f"Added {adjustment.seconds:.1f}s lead-in for clearer standalone context."
-            )
+        elif adjustment.direction == "start" and "Added" not in message:
+            message = f"Added {adjustment.seconds:.1f}s lead-in for clearer standalone context."
+        if message not in warnings:
+            warnings.append(message)
 
     return candidate.model_copy(
         update={
@@ -1032,6 +1065,7 @@ def _refine_final_candidates_boundaries(
     source_duration: float,
     max_gap_seconds: float,
     context_padding_seconds: float,
+    visual_document=None,
 ) -> list[ClipCandidate]:
     return [
         _refine_final_candidate_boundaries(
@@ -1041,6 +1075,7 @@ def _refine_final_candidates_boundaries(
             source_duration=source_duration,
             max_gap_seconds=max_gap_seconds,
             context_padding_seconds=context_padding_seconds,
+            visual_document=visual_document,
         )
         for candidate in candidates
     ]
@@ -1067,10 +1102,16 @@ def _validate_final_candidates(
 
 
 def _sync_analysis_clip_flags(project_id: str, final_candidates: list[ClipCandidate]) -> None:
-    selected_segment_ids = {segment_id for candidate in final_candidates for segment_id in candidate.segment_ids}
+    selected_segment_ids = {
+        segment_id for candidate in final_candidates for segment_id in candidate.segment_ids
+    }
     analysis = load_project_analysis(project_id)
     updated_segments = [
-        segment.model_copy(update={"clip_candidate": segment.segment_id in selected_segment_ids})
+        segment.model_copy(
+            update={
+                "clip_candidate": segment.clip_candidate or segment.segment_id in selected_segment_ids,
+            }
+        )
         for segment in analysis.segments
     ]
     updated_document = analysis.model_copy(
@@ -1136,7 +1177,39 @@ def _deduplicate_candidates(candidates: list[ClipCandidate]) -> list[ClipCandida
             continue
 
         existing = overlapping[0]
-        if candidate.score > existing.score + 2.0:
+        margin = settings.clip_selection_narrative_arc_score_margin
+
+        if (
+            candidate.start >= existing.start
+            and candidate.end <= existing.end
+            and candidate.score <= existing.score + margin
+        ):
+            logger.info(
+                "Dropped payoff-only subclip %.2f-%.2f in favor of narrative arc %.2f-%.2f",
+                candidate.start,
+                candidate.end,
+                existing.start,
+                existing.end,
+            )
+            continue
+
+        if (
+            existing.start >= candidate.start
+            and existing.end <= candidate.end
+            and candidate.score + margin >= existing.score
+        ):
+            kept.remove(existing)
+            kept.append(candidate)
+            logger.info(
+                "Kept broader narrative arc %.2f-%.2f over subclip %.2f-%.2f",
+                candidate.start,
+                candidate.end,
+                existing.start,
+                existing.end,
+            )
+            continue
+
+        if candidate.score > existing.score + margin:
             kept.remove(existing)
             kept.append(candidate)
             logger.info(
@@ -1216,11 +1289,22 @@ def select_project_clips(
     source_duration = _source_duration(transcript, analysis, project_id)
     transcript_segments = {segment.id: segment for segment in transcript.segments}
     known_segment_ids = set(transcript_segments)
+    visual_document = (
+        try_load_project_visual_analysis(project_id)
+        if settings.visual_analysis_enabled and should_apply_visual_boundaries()
+        else None
+    )
+    visual_scoring_document = (
+        try_load_project_visual_analysis(project_id)
+        if settings.visual_analysis_enabled
+        and settings.visual_analysis_ranking_mode.lower() in {"conservative", "shadow"}
+        else None
+    )
 
     try:
         cleanup_clip_candidates_output(project_id)
-        groups = _rank_seed_groups(_group_seed_segments(analysis.segments, options.max_gap_seconds))
-        groups = groups[: max(1, settings.clip_selection_max_seed_groups)]
+        seed_groups = _group_seed_segments(analysis.segments, options.max_gap_seconds)
+        groups = _select_construction_seed_groups(seed_groups, source_duration)
         raw_candidates: list[ClipCandidate] = []
 
         construction_started = time.perf_counter()
@@ -1250,6 +1334,15 @@ def select_project_clips(
             elapsed=f"{time.perf_counter() - construction_started:.3f}s",
         )
 
+        raw_candidates = apply_visual_scoring(
+            raw_candidates,
+            visual_scoring_document,
+            quality_threshold=max(
+                options.min_score,
+                settings.clip_selection_quality_threshold,
+            ),
+        )
+
         ranking_started = time.perf_counter()
         deduplicated = _deduplicate_candidates(raw_candidates)
         quality_threshold = max(
@@ -1273,6 +1366,7 @@ def select_project_clips(
             source_duration=source_duration,
             max_gap_seconds=options.max_gap_seconds,
             context_padding_seconds=options.context_padding_seconds,
+            visual_document=visual_document,
         )
         log_stage_event(
             "ranking_candidates",
@@ -1296,10 +1390,14 @@ def select_project_clips(
             quality_threshold=quality_threshold,
             selection_pipeline_version=settings.clip_selection_pipeline_version,
             analysis_pipeline_version=settings.analysis_pipeline_version,
+            visual_analysis_pipeline_version=(
+                visual_scoring_document.pipeline_version
+                if visual_scoring_document is not None
+                else None
+            ),
         )
         document = _validate_document(document)
         _write_clip_candidates_atomically(project_id, document)
-        _sync_analysis_clip_flags(project_id, final_candidates)
         log_stage_event(
             "saving_results",
             "complete",

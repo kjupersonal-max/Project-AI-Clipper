@@ -2,6 +2,7 @@
 
 import {
   analyzeProject,
+  analyzeProjectVisuals,
   deleteProjectClip,
   deleteProjectClipCaptions,
   exportProjectClip,
@@ -13,6 +14,7 @@ import {
   fetchProjectClipCaptions,
   fetchProjectClipExports,
   fetchProjectTranscript,
+  fetchProjectVisualAnalysis,
   generateProjectClipCaptions,
   getProjectVideoUrl,
   inspectProject,
@@ -33,6 +35,7 @@ import {
   type ExportClipResponse,
   type Project,
   type TranscriptDocument,
+  type VisualAnalysisDocument,
 } from "@/lib/api/projects";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -50,6 +53,7 @@ import {
   buildCaptionUpdatePayload,
   CaptionEditor,
 } from "@/components/projects/CaptionEditor";
+import { VisualAnalysisPanel } from "@/components/projects/VisualAnalysisPanel";
 import {
   TimelineAnalysisPanel,
   TimelineAnalysisState,
@@ -113,6 +117,10 @@ const statusVariant = (
       return "info";
     case "skipped":
       return "muted";
+    case "not_started":
+      return "default";
+    case "unavailable":
+      return "muted";
     default:
       return "default";
   }
@@ -134,14 +142,18 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
   const [transcribeState, setTranscribeState] = useState<ActionState>("idle");
   const [analyzeState, setAnalyzeState] = useState<ActionState>("idle");
   const [selectClipsState, setSelectClipsState] = useState<ActionState>("idle");
+  const [visualAnalyzeState, setVisualAnalyzeState] = useState<ActionState>("idle");
   const [transcript, setTranscript] = useState<TranscriptDocument | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisDocument | null>(null);
+  const [visualAnalysis, setVisualAnalysis] = useState<VisualAnalysisDocument | null>(null);
   const [clipCandidates, setClipCandidates] = useState<ClipCandidatesDocument | null>(null);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
   const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [visualAnalysisLoading, setVisualAnalysisLoading] = useState(false);
   const [clipCandidatesLoading, setClipCandidatesLoading] = useState(false);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [visualAnalysisError, setVisualAnalysisError] = useState<string | null>(null);
   const [clipCandidatesError, setClipCandidatesError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [analysisFilters, setAnalysisFilters] = useState<AnalysisFilters>(defaultAnalysisFilters);
@@ -190,7 +202,8 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
     extractState === "loading" ||
     transcribeState === "loading" ||
     analyzeState === "loading" ||
-    selectClipsState === "loading";
+    selectClipsState === "loading" ||
+    visualAnalyzeState === "loading";
 
   const loadTranscript = useCallback(async () => {
     setTranscriptLoading(true);
@@ -245,6 +258,34 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
       return null;
     } finally {
       setAnalysisLoading(false);
+    }
+  }, [projectId]);
+
+  const loadVisualAnalysis = useCallback(async () => {
+    setVisualAnalysisLoading(true);
+    setVisualAnalysisError(null);
+
+    try {
+      const data = await fetchProjectVisualAnalysis(projectId);
+      setVisualAnalysis(data);
+      return data;
+    } catch (error) {
+      const status =
+        error && typeof error === "object" && "status" in error
+          ? (error as ApiError).status
+          : undefined;
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? String((error as ApiError).message)
+          : "Unable to load visual analysis.";
+
+      setVisualAnalysis(null);
+      if (status !== 404) {
+        setVisualAnalysisError(message);
+      }
+      return null;
+    } finally {
+      setVisualAnalysisLoading(false);
     }
   }, [projectId]);
 
@@ -395,6 +436,13 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
         setAnalysisError(null);
       }
 
+      if (data.visual_analysis_status === "completed") {
+        await loadVisualAnalysis();
+      } else {
+        setVisualAnalysis(null);
+        setVisualAnalysisError(null);
+      }
+
       if (data.clip_selection_status === "completed") {
         await loadClipCandidates();
       } else {
@@ -402,7 +450,7 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
         setClipCandidatesError(null);
       }
     },
-    [loadAnalysis, loadClipCandidates, loadExportedClips, loadTranscript],
+    [loadAnalysis, loadClipCandidates, loadExportedClips, loadTranscript, loadVisualAnalysis],
   );
 
   const seekVideoTo = useCallback((seconds: number) => {
@@ -1006,6 +1054,29 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
     }
   };
 
+  const handleVisualAnalyze = async (force = false) => {
+    setVisualAnalyzeState("loading");
+    setActionError(null);
+    setVisualAnalysisError(null);
+
+    try {
+      await analyzeProjectVisuals(projectId, force);
+      setVisualAnalyzeState("success");
+      await refreshProject();
+    } catch (error) {
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? String((error as ApiError).message)
+          : "Visual analysis failed.";
+      setActionError(message);
+      setVisualAnalyzeState("error");
+      if (/unavailable|disabled|ffmpeg/i.test(message)) {
+        setVisualAnalysisError(message);
+      }
+      await refreshProject();
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-24 text-sm text-zinc-500">
@@ -1055,6 +1126,9 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
             </Badge>
             <Badge variant={statusVariant(project.clip_selection_status)}>
               Clip selection: {project.clip_selection_status}
+            </Badge>
+            <Badge variant={statusVariant(project.visual_analysis_status)}>
+              Visual: {project.visual_analysis_status.replace("_", " ")}
             </Badge>
           </div>
           <div>
@@ -1456,6 +1530,27 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
         </CardContent>
       </Card>
       </div>
+
+      <Card>
+        <CardHeader
+          title="Visual Analysis"
+          description={
+            project.visual_analysis_status === "completed"
+              ? "Lightweight sampled-frame motion and scene-change signals for clip ranking"
+              : "Optional visual pass — run before Select Clips to improve ranking and boundaries"
+          }
+        />
+        <CardContent>
+          <VisualAnalysisPanel
+            project={project}
+            visualAnalysis={visualAnalysis}
+            loading={visualAnalysisLoading}
+            running={visualAnalyzeState === "loading"}
+            error={visualAnalysisError}
+            onRun={handleVisualAnalyze}
+          />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader

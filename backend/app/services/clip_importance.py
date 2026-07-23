@@ -486,8 +486,19 @@ def _duration_preference_bonus(candidate: ClipCandidate) -> float:
     return -2.0
 
 
+def _selection_sort_score(candidate: ClipCandidate) -> float:
+    try:
+        from app.services.visual_scoring import visual_ranking_score
+
+        return visual_ranking_score(candidate)
+    except Exception:
+        return candidate.score
+
+
 def _effective_rank_score(candidate: ClipCandidate, selected: list[ClipCandidate]) -> float:
-    return candidate.score + _duration_preference_bonus(candidate) - _diversity_penalty(candidate, selected)
+    return _selection_sort_score(candidate) + _duration_preference_bonus(candidate) - _diversity_penalty(
+        candidate, selected
+    )
 
 
 def global_importance_selection(
@@ -505,7 +516,7 @@ def global_importance_selection(
     ]
     eligible.sort(
         key=lambda candidate: (
-            candidate.score + _duration_preference_bonus(candidate),
+            _selection_sort_score(candidate) + _duration_preference_bonus(candidate),
             candidate.confidence,
             -candidate.start,
         ),
@@ -534,6 +545,29 @@ def global_importance_selection(
             )
             continue
 
+        if (
+            len(selected) >= 3
+            and candidate.score
+            < quality_threshold + settings.clip_selection_additional_clip_min_margin
+        ):
+            rejected.append(
+                RejectedClipCandidate(
+                    clip_id=candidate.clip_id,
+                    start=candidate.start,
+                    end=candidate.end,
+                    duration=candidate.duration,
+                    score=candidate.score,
+                    score_breakdown=candidate.score_breakdown,
+                    importance_breakdown=candidate.importance_breakdown,
+                    reason=candidate.reason,
+                    rejection_reason=(
+                        "Marginal quality for an additional clip versus established picks "
+                        f"({candidate.score:.1f} < {quality_threshold + settings.clip_selection_additional_clip_min_margin:.1f})."
+                    ),
+                )
+            )
+            continue
+
         if len(selected) >= max_count:
             rejected.append(
                 RejectedClipCandidate(
@@ -556,8 +590,8 @@ def global_importance_selection(
             if _candidate_overlap_ratio(candidate, existing) >= 0.55
         ]
         if overlap_conflict:
-            stronger = max(existing.score for existing in overlap_conflict)
-            if candidate.score <= stronger + 4.0:
+            stronger = max(_selection_sort_score(existing) for existing in overlap_conflict)
+            if _selection_sort_score(candidate) <= stronger + 4.0:
                 rejected.append(
                     RejectedClipCandidate(
                         clip_id=candidate.clip_id,
@@ -582,7 +616,9 @@ def global_importance_selection(
                 and _candidate_overlap_ratio(candidate, existing) >= 0.25
             )
         ]
-        if similar and candidate.score <= max(existing.score for existing in similar) + 2.0:
+        if similar and _selection_sort_score(candidate) <= max(
+            _selection_sort_score(existing) for existing in similar
+        ) + 2.0:
             rejected.append(
                 RejectedClipCandidate(
                     clip_id=candidate.clip_id,

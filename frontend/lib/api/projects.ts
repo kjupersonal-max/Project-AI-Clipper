@@ -7,6 +7,13 @@ export type ProcessingStatus =
   | "failed"
   | "skipped";
 
+export type VisualAnalysisStatus =
+  | "not_started"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "unavailable";
+
 export type VideoMetadata = {
   duration_seconds: number | null;
   width: number | null;
@@ -53,6 +60,13 @@ export type Project = {
   clip_selection_started_at: string | null;
   clip_selection_completed_at: string | null;
   clip_candidate_count: number | null;
+  visual_analysis_status: VisualAnalysisStatus;
+  visual_analysis_path: string | null;
+  visual_analysis_started_at: string | null;
+  visual_analysis_completed_at: string | null;
+  visual_analysis_duration_seconds: number | null;
+  visual_analysis_sampled_frame_count: number | null;
+  visual_analysis_window_count: number | null;
   size_bytes: number;
   activity_log: ActivityLogEntry[];
   created_at: string;
@@ -210,6 +224,51 @@ export type VisualEvidence = {
   provider?: string | null;
   model?: string | null;
   notes?: string[];
+  visual_contribution?: number | null;
+  measured_signals?: string[];
+  aligned_timestamp?: number | null;
+  aligned_transcript_event?: string | null;
+  alignment_confidence?: number | null;
+  alignment_reason?: string | null;
+  blocked_reason?: string | null;
+  signals?: {
+    motion_spike?: number | null;
+    scene_change?: number | null;
+    physical_action?: number | null;
+    face_presence?: number | null;
+  };
+};
+
+export type VisualWindow = {
+  start: number;
+  end: number;
+  motion_score: number;
+  scene_change_score: number;
+  activity_score: number;
+  activity_label: string;
+  events: string[];
+};
+
+export type VisualAnalysisDocument = {
+  project_id: string;
+  pipeline_version: string;
+  processing_duration_seconds: number;
+  sampled_frame_count: number;
+  window_seconds: number;
+  windows: VisualWindow[];
+  warnings: string[];
+  created_at: string;
+};
+
+export type VisualAnalyzeResponse = {
+  project_id: string;
+  status: VisualAnalysisStatus;
+  visual_analysis_path: string | null;
+  processing_duration_seconds: number | null;
+  sampled_frame_count: number | null;
+  window_count: number | null;
+  warnings: string[];
+  message: string;
 };
 
 export type ClipCandidate = {
@@ -259,6 +318,7 @@ export type ClipCandidatesDocument = {
   rejected_candidates?: RejectedClipCandidate[];
   quality_threshold?: number | null;
   selection_pipeline_version?: string | null;
+  visual_analysis_pipeline_version?: string | null;
   created_at: string;
 };
 
@@ -508,6 +568,39 @@ export async function fetchProjectAnalysis(projectId: string): Promise<AnalysisD
   }
 
   return response.json() as Promise<AnalysisDocument>;
+}
+
+export async function analyzeProjectVisuals(
+  projectId: string,
+  force = false,
+): Promise<VisualAnalyzeResponse> {
+  const query = force ? "?force=true" : "";
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/visual-analyze${query}`,
+    {
+      method: "POST",
+    },
+  );
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<VisualAnalyzeResponse>;
+}
+
+export async function fetchProjectVisualAnalysis(
+  projectId: string,
+): Promise<VisualAnalysisDocument> {
+  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/visual-analysis`, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<VisualAnalysisDocument>;
 }
 
 export async function selectProjectClips(

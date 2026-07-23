@@ -41,6 +41,9 @@ from app.models.project import (
     DeleteCaptionWordRequest,
     UpdateVocabularyHintsRequest,
     TranscriptionQualityResponse,
+    VisualAnalysisDocument,
+    VisualAnalyzeResponse,
+    VisualAnalysisStatus,
     project_to_response,
     utc_now_iso,
 )
@@ -119,6 +122,15 @@ from app.services.timeline_analysis import (
     cleanup_partial_analysis_output,
     has_existing_analysis_output,
     load_project_analysis,
+)
+from app.services.visual_analysis import (
+    VisualAnalysisNotFoundError,
+    VisualAnalysisProcessError,
+    VisualAnalysisUnavailableError,
+    analyze_project_visuals,
+    load_project_visual_analysis,
+    mark_visual_analysis_unavailable,
+    visual_analysis_available,
 )
 from app.services.transcription import (
     TranscriptionAudioNotFoundError,
@@ -1414,3 +1426,95 @@ def select_clips(
             project.last_error = project.last_error or "Clip selection did not complete."
             project.append_log("Clip selection ended without completion.", level="error")
             save_project(project)
+
+
+@router.post("/{project_id}/visual-analyze", response_model=VisualAnalyzeResponse)
+def visual_analyze_project(project_id: str, force: bool = False) -> VisualAnalyzeResponse:
+    validate_project_id(project_id)
+    project = load_project(project_id)
+
+    if not settings.visual_analysis_enabled:
+        mark_visual_analysis_unavailable(
+            project_id,
+            reason="Visual analysis is disabled in configuration.",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Visual analysis is disabled in configuration.",
+        )
+
+    if not visual_analysis_available():
+        mark_visual_analysis_unavailable(
+            project_id,
+            reason="FFmpeg is unavailable for visual analysis.",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Visual analysis is unavailable because FFmpeg is not installed.",
+        )
+
+    endpoint_started = time.perf_counter()
+    log_stage_event("api_visual_analyze", "start", project_id=project_id, force=force)
+
+    try:
+        document = analyze_project_visuals(project_id, force=force)
+        project = load_project(project_id)
+        elapsed = time.perf_counter() - endpoint_started
+        cached = elapsed < 0.05 and not force
+        message = (
+            "Visual analysis loaded from cache."
+            if cached
+            else "Visual analysis completed."
+        )
+        project.append_log(message)
+        save_project(project)
+
+        log_timing_summary(
+            project_id=project_id,
+            pipeline="api_visual_analyze",
+            total_seconds=time.perf_counter() - endpoint_started,
+            status="completed",
+            sampled_frame_count=document.sampled_frame_count,
+            window_count=len(document.windows),
+        )
+
+        return VisualAnalyzeResponse(
+            project_id=project_id,
+            status=VisualAnalysisStatus.COMPLETED,
+            visual_analysis_path=project.visual_analysis_path,
+            processing_duration_seconds=document.processing_duration_seconds,
+            sampled_frame_count=document.sampled_frame_count,
+            window_count=len(document.windows),
+            warnings=document.warnings,
+            message=message,
+        )
+    except VisualAnalysisUnavailableError as exc:
+        mark_visual_analysis_unavailable(project_id, reason=exc.message)
+        raise HTTPException(status_code=503, detail=exc.message) from exc
+    except VisualAnalysisProcessError as exc:
+        project = load_project(project_id)
+        project.visual_analysis_status = VisualAnalysisStatus.FAILED
+        project.visual_analysis_completed_at = utc_now_iso()
+        project.last_error = exc.message
+        project.append_log(f"Visual analysis failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+    finally:
+        project = load_project(project_id)
+        if project.visual_analysis_status == VisualAnalysisStatus.PROCESSING:
+            project.visual_analysis_status = VisualAnalysisStatus.FAILED
+            project.visual_analysis_completed_at = utc_now_iso()
+            project.last_error = project.last_error or "Visual analysis did not complete."
+            project.append_log("Visual analysis ended without completion.", level="error")
+            save_project(project)
+
+
+@router.get("/{project_id}/visual-analysis", response_model=VisualAnalysisDocument)
+def get_project_visual_analysis(project_id: str) -> VisualAnalysisDocument:
+    validate_project_id(project_id)
+    try:
+        return load_project_visual_analysis(project_id)
+    except VisualAnalysisNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except VisualAnalysisProcessError as exc:
+        raise HTTPException(status_code=500, detail=exc.message) from exc

@@ -34,6 +34,14 @@ class ChunkProcessingStatus(str, Enum):
     CACHED = "cached"
 
 
+class VisualAnalysisStatus(str, Enum):
+    NOT_STARTED = "not_started"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    UNAVAILABLE = "unavailable"
+
+
 class PipelineStage(str, Enum):
     DISCOVERY_TRANSCRIPTION = "discovery_transcription"
     DISCOVERY_CHUNK = "discovery_chunk"
@@ -108,6 +116,13 @@ class ProjectMetadata(BaseModel):
     clip_selection_started_at: str | None = None
     clip_selection_completed_at: str | None = None
     clip_candidate_count: int | None = None
+    visual_analysis_status: VisualAnalysisStatus = VisualAnalysisStatus.NOT_STARTED
+    visual_analysis_path: str | None = None
+    visual_analysis_started_at: str | None = None
+    visual_analysis_completed_at: str | None = None
+    visual_analysis_duration_seconds: float | None = None
+    visual_analysis_sampled_frame_count: int | None = None
+    visual_analysis_window_count: int | None = None
     activity_log: list[ActivityLogEntry] = Field(default_factory=list)
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
@@ -165,6 +180,13 @@ class ProjectResponse(BaseModel):
     clip_selection_started_at: str | None = None
     clip_selection_completed_at: str | None = None
     clip_candidate_count: int | None = None
+    visual_analysis_status: VisualAnalysisStatus = VisualAnalysisStatus.NOT_STARTED
+    visual_analysis_path: str | None = None
+    visual_analysis_started_at: str | None = None
+    visual_analysis_completed_at: str | None = None
+    visual_analysis_duration_seconds: float | None = None
+    visual_analysis_sampled_frame_count: int | None = None
+    visual_analysis_window_count: int | None = None
     size_bytes: int
     activity_log: list[ActivityLogEntry]
     created_at: str
@@ -339,6 +361,64 @@ class VisualEvidence(BaseModel):
     model: str | None = None
     signals: VisualSignalScores = Field(default_factory=VisualSignalScores)
     notes: list[str] = Field(default_factory=list)
+    visual_contribution: float | None = None
+    measured_signals: list[str] = Field(default_factory=list)
+    aligned_timestamp: float | None = Field(default=None, ge=0.0)
+    aligned_transcript_event: str | None = None
+    alignment_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    alignment_reason: str | None = None
+    blocked_reason: str | None = None
+
+
+class SemanticVisualEvent(BaseModel):
+    """Future semantic detectors may populate these; not inferred in Phase 6."""
+
+    event_type: str
+    start: float = Field(ge=0.0)
+    end: float = Field(gt=0.0)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    source: str | None = None
+
+
+class VisualWindow(BaseModel):
+    start: float = Field(ge=0.0)
+    end: float = Field(gt=0.0)
+    motion_score: float = Field(ge=0.0, le=10.0)
+    scene_change_score: float = Field(ge=0.0, le=10.0)
+    activity_score: float = Field(ge=0.0, le=10.0)
+    brightness_delta: float = Field(default=0.0, ge=0.0, le=10.0)
+    face_count: int | None = Field(default=None, ge=0)
+    activity_label: str = "low"
+    events: list[str] = Field(default_factory=list)
+    peak_motion_timestamp: float | None = Field(default=None, ge=0.0)
+
+
+class VisualAnalysisDocument(BaseModel):
+    project_id: str
+    pipeline_version: str
+    video_fingerprint: str
+    provider: str = "ffmpeg-sampled"
+    model: str | None = "grayscale-motion-v1"
+    processing_duration_seconds: float = Field(ge=0.0)
+    sampled_frame_count: int = Field(ge=0)
+    sample_interval_seconds: float = Field(gt=0.0)
+    window_seconds: float = Field(gt=0.0)
+    windows: list[VisualWindow] = Field(default_factory=list)
+    semantic_events: list[SemanticVisualEvent] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    failure_reason: str | None = None
+    created_at: str = Field(default_factory=utc_now_iso)
+
+
+class VisualAnalyzeResponse(BaseModel):
+    project_id: str
+    status: VisualAnalysisStatus
+    visual_analysis_path: str | None = None
+    processing_duration_seconds: float | None = None
+    sampled_frame_count: int | None = None
+    window_count: int | None = None
+    warnings: list[str] = Field(default_factory=list)
+    message: str = ""
 
 
 class RejectedClipCandidate(BaseModel):
@@ -392,6 +472,7 @@ class ClipCandidatesDocument(BaseModel):
     quality_threshold: float | None = None
     selection_pipeline_version: str | None = None
     analysis_pipeline_version: str | None = None
+    visual_analysis_pipeline_version: str | None = None
     created_at: str = Field(default_factory=utc_now_iso)
 
 
@@ -764,6 +845,13 @@ def project_to_response(project: ProjectMetadata) -> ProjectResponse:
         clip_selection_started_at=project.clip_selection_started_at,
         clip_selection_completed_at=project.clip_selection_completed_at,
         clip_candidate_count=project.clip_candidate_count,
+        visual_analysis_status=project.visual_analysis_status,
+        visual_analysis_path=project.visual_analysis_path,
+        visual_analysis_started_at=project.visual_analysis_started_at,
+        visual_analysis_completed_at=project.visual_analysis_completed_at,
+        visual_analysis_duration_seconds=project.visual_analysis_duration_seconds,
+        visual_analysis_sampled_frame_count=project.visual_analysis_sampled_frame_count,
+        visual_analysis_window_count=project.visual_analysis_window_count,
         size_bytes=project.size_bytes,
         activity_log=project.activity_log,
         created_at=project.created_at,

@@ -108,6 +108,33 @@ def _run_command(
         ) from exc
 
 
+def _run_command_bytes(
+    command: list[str],
+    *,
+    timeout_seconds: int,
+    cwd: str | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    try:
+        return subprocess.run(
+            command,
+            capture_output=True,
+            text=False,
+            timeout=timeout_seconds,
+            check=False,
+            shell=False,
+            cwd=cwd,
+        )
+    except FileNotFoundError as exc:
+        binary = command[0]
+        raise FFmpegNotAvailableError(
+            f"{binary} was not found in PATH. Install FFmpeg and ensure it is available."
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise FFmpegProcessError(
+            f"Processing timed out after {timeout_seconds} seconds."
+        ) from exc
+
+
 def _extract_version(output: str) -> str | None:
     first_line = output.strip().splitlines()[0] if output.strip() else ""
     return first_line or None
@@ -489,3 +516,58 @@ def cleanup_audio_output(project_id: str) -> None:
     audio_dir = settings.audio_dir / project_id
     if audio_dir.exists():
         shutil.rmtree(audio_dir, ignore_errors=True)
+
+
+def extract_sampled_grayscale_frames(
+    video_path: Path,
+    *,
+    sample_interval_seconds: float,
+    frame_width: int,
+    frame_height: int,
+    duration_seconds: float | None = None,
+) -> list[tuple[float, bytes]]:
+    ensure_ffmpeg_tools()
+    if sample_interval_seconds <= 0:
+        raise FFmpegProcessError("Sample interval must be greater than zero.")
+
+    fps_value = 1.0 / sample_interval_seconds
+    scale_filter = f"fps={fps_value:.6f},scale={frame_width}:{frame_height}"
+    command = [
+        _get_ffmpeg_path(),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(video_path),
+        "-an",
+        "-sn",
+        "-dn",
+        "-vf",
+        scale_filter,
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "gray",
+        "pipe:1",
+    ]
+    result = _run_command_bytes(command, timeout_seconds=settings.ffmpeg_timeout_seconds)
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace")
+        raise FFmpegProcessError(_sanitize_ffmpeg_error(stderr))
+
+    frame_size = frame_width * frame_height
+    payload = result.stdout
+    if frame_size <= 0 or not payload:
+        return []
+
+    frame_count = len(payload) // frame_size
+    frames: list[tuple[float, bytes]] = []
+    for index in range(frame_count):
+        start = index * frame_size
+        end = start + frame_size
+        timestamp = round(index * sample_interval_seconds, 3)
+        if duration_seconds is not None and timestamp > duration_seconds + sample_interval_seconds:
+            break
+        frames.append((timestamp, payload[start:end]))
+    return frames
+

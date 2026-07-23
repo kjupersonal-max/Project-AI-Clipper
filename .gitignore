@@ -18,6 +18,14 @@ backend/transcripts/*
 backend/analysis/*
 !backend/analysis/.gitkeep
 
+# Clip candidates
+backend/clip_candidates/*
+!backend/clip_candidates/.gitkeep
+
+# Visual analysis cache
+backend/visual_analysis/*
+!backend/visual_analysis/.gitkeep
+
 # Python
 backend/.venv/
 backend/venv/

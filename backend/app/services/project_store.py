@@ -52,6 +52,7 @@ def ensure_backend_dirs() -> None:
     settings.transcripts_dir.mkdir(parents=True, exist_ok=True)
     settings.analysis_dir.mkdir(parents=True, exist_ok=True)
     settings.clip_candidates_dir.mkdir(parents=True, exist_ok=True)
+    settings.visual_analysis_dir.mkdir(parents=True, exist_ok=True)
 
 
 def create_project_metadata(
@@ -186,6 +187,24 @@ def get_clip_candidates_output_path(project_id: str) -> Path:
 
 def get_relative_clip_candidates_path(project_id: str) -> str:
     return f"{project_id}/{settings.clip_candidates_output_filename}"
+
+
+def get_visual_analysis_output_dir(project_id: str) -> Path:
+    validated_id = validate_project_id(project_id)
+    visual_dir = _resolve_within(
+        settings.visual_analysis_dir,
+        settings.visual_analysis_dir / validated_id,
+    )
+    visual_dir.mkdir(parents=True, exist_ok=True)
+    return visual_dir
+
+
+def get_visual_analysis_output_path(project_id: str) -> Path:
+    return get_visual_analysis_output_dir(project_id) / settings.visual_analysis_output_filename
+
+
+def get_relative_visual_analysis_path(project_id: str) -> str:
+    return f"{project_id}/{settings.visual_analysis_output_filename}"
 
 
 def get_clips_output_dir(project_id: str) -> Path:

@@ -3,7 +3,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from app.models.project import SegmentAnalysis, TranscriptSegment
+from app.core.config import settings
+from app.models.project import SegmentAnalysis, TranscriptSegment, VisualAnalysisDocument, VisualWindow
+from app.services.visual_analysis import windows_overlapping_range
 
 FILLER_PATTERNS = (
     "okay",
@@ -211,6 +213,16 @@ def _extend_post_payoff_tail(
         next_id += 1
 
         if _ends_naturally(next_segment.text) and tail_from_payoff >= min_tail_seconds:
+            following = by_id.get(next_id)
+            if (
+                following is not None
+                and following.start - next_segment.end <= max_gap_seconds + context_padding_seconds
+                and _is_acceptable_tail_segment(following, core_segments, payoff_segment)
+                and following.end - selected[0].start <= max_duration_seconds
+                and tail_from_payoff < max_tail_seconds
+                and _segment_peak_engagement(following) + 1.0 >= _segment_peak_engagement(payoff_segment)
+            ):
+                continue
             break
         if tail_from_payoff >= max_tail_seconds:
             break
@@ -283,6 +295,163 @@ def _maybe_add_lead_in(
     ]
 
 
+def _activity_after_time(windows: list[VisualWindow], timestamp: float) -> float:
+    trailing = [window for window in windows if window.start >= timestamp - 0.5]
+    if not trailing:
+        return 0.0
+    return max(window.activity_score for window in trailing)
+
+
+def _find_settle_time(windows: list[VisualWindow], after: float, *, max_time: float) -> float | None:
+    relevant = [
+        window
+        for window in windows
+        if after <= window.start <= max_time and window.activity_label != "high"
+    ]
+    if not relevant:
+        return None
+    return min(window.end for window in relevant)
+
+
+def _extend_visual_activity_tail(
+    segments: list[SegmentAnalysis],
+    all_segments: list[SegmentAnalysis],
+    visual_document: VisualAnalysisDocument,
+    *,
+    max_gap_seconds: float,
+    context_padding_seconds: float,
+    max_duration_seconds: float,
+    payoff_segment: SegmentAnalysis,
+) -> tuple[list[SegmentAnalysis], list[BoundaryAdjustment]]:
+    if not segments:
+        return segments, []
+
+    end = segments[-1].end
+    max_extension = min(
+        settings.clip_selection_post_payoff_tail_max_seconds,
+        settings.visual_analysis_visual_boundary_max_extension_seconds,
+    )
+    if segments[-1].end - payoff_segment.end > max_extension + 0.25:
+        return segments, []
+
+    trailing_windows = windows_overlapping_range(
+        visual_document,
+        payoff_segment.end - 0.5,
+        payoff_segment.end + max_extension,
+    )
+    if not trailing_windows:
+        return segments, []
+
+    peak_activity = max(window.activity_score for window in trailing_windows)
+    if peak_activity < 5.0:
+        return segments, []
+
+    settle_time = _find_settle_time(trailing_windows, end, max_time=end + max_extension)
+    by_id = _ordered_segments_by_id(all_segments)
+    selected_ids = {segment.segment_id for segment in segments}
+    adjustments: list[BoundaryAdjustment] = []
+    selected = list(segments)
+    next_id = max(selected_ids) + 1
+
+    while selected[-1].end - payoff_segment.end < max_extension:
+        next_segment = by_id.get(next_id)
+        if next_segment is None:
+            break
+        if next_segment.start > payoff_segment.end + max_extension + 0.5:
+            break
+        gap = next_segment.start - selected[-1].end
+        if gap > max_gap_seconds + context_padding_seconds:
+            break
+        projected = next_segment.end - selected[0].start
+        if projected > max_duration_seconds:
+            break
+        if not _is_acceptable_tail_segment(next_segment, segments, payoff_segment):
+            break
+        post_activity = _activity_after_time(
+            windows_overlapping_range(
+                visual_document,
+                next_segment.start,
+                next_segment.end + 0.5,
+            ),
+            next_segment.start,
+        )
+        if post_activity < 4.0 and selected[-1].end - payoff_segment.end >= 0.75:
+            break
+        if _is_filler_segment(next_segment):
+            break
+        if _segment_peak_engagement(next_segment) + 1.5 < _segment_peak_engagement(payoff_segment):
+            break
+        selected.append(next_segment)
+        selected_ids.add(next_segment.segment_id)
+        adjustments.append(
+            BoundaryAdjustment(
+                direction="end",
+                seconds=round(next_segment.end - segments[-1].end, 3),
+                reason="Extended end while visual activity remained elevated after payoff",
+                segment_id=next_segment.segment_id,
+            )
+        )
+        next_id += 1
+        if settle_time is not None and selected[-1].end >= settle_time:
+            break
+        if selected[-1].end - payoff_segment.end >= max_extension:
+            break
+    return selected, adjustments
+
+
+def _maybe_visual_lead_in(
+    segments: list[SegmentAnalysis],
+    all_segments: list[SegmentAnalysis],
+    visual_document: VisualAnalysisDocument,
+    *,
+    max_gap_seconds: float,
+    context_padding_seconds: float,
+    max_duration_seconds: float,
+    max_lead_in_seconds: float,
+) -> tuple[list[SegmentAnalysis], list[BoundaryAdjustment]]:
+    if not segments:
+        return segments, []
+    first = segments[0]
+    opening_windows = windows_overlapping_range(
+        visual_document,
+        max(0.0, first.start - max_lead_in_seconds),
+        first.start + 0.5,
+    )
+    if not opening_windows:
+        return segments, []
+    if not any("camera_cut" in window.events or window.activity_score >= 6.0 for window in opening_windows):
+        return segments, []
+
+    by_id = _ordered_segments_by_id(all_segments)
+    previous = by_id.get(first.segment_id - 1)
+    if previous is None:
+        return segments, []
+    gap = first.start - previous.end
+    if gap > max_gap_seconds + context_padding_seconds:
+        return segments, []
+    if first.start - previous.start > max_lead_in_seconds:
+        return segments, []
+    pre_activity = _activity_after_time(
+        windows_overlapping_range(visual_document, previous.start, first.start),
+        previous.start,
+    )
+    if pre_activity < 4.5:
+        return segments, []
+    if _segment_peak_engagement(previous) >= _segment_peak_engagement(first) + 2.0:
+        return segments, []
+    projected = segments[-1].end - previous.start
+    if projected > max_duration_seconds:
+        return segments, []
+    return [previous, *segments], [
+        BoundaryAdjustment(
+            direction="start",
+            seconds=round(first.start - previous.start, 3),
+            reason="Added visual lead-in before action started on screen",
+            segment_id=previous.segment_id,
+        )
+    ]
+
+
 def refine_clip_segment_boundaries(
     core_segments: list[SegmentAnalysis],
     all_segments: list[SegmentAnalysis],
@@ -293,6 +462,7 @@ def refine_clip_segment_boundaries(
     min_tail_seconds: float = 1.0,
     max_tail_seconds: float = 4.0,
     max_lead_in_seconds: float = 4.0,
+    visual_document: VisualAnalysisDocument | None = None,
 ) -> BoundaryRefinementResult:
     if not core_segments:
         return BoundaryRefinementResult(segments=[], adjustments=[])
@@ -314,7 +484,40 @@ def refine_clip_segment_boundaries(
         max_duration_seconds=max_duration_seconds,
         max_lead_in_seconds=max_lead_in_seconds,
     )
+    adjustments = [*lead_adjustments, *tail_adjustments]
+    if visual_document is not None:
+        payoff_index = _payoff_segment_index(core_segments)
+        payoff_segment = core_segments[payoff_index]
+        refined, visual_tail = _extend_visual_activity_tail(
+            refined,
+            all_segments,
+            visual_document,
+            max_gap_seconds=max_gap_seconds,
+            context_padding_seconds=context_padding_seconds,
+            max_duration_seconds=max_duration_seconds,
+            payoff_segment=payoff_segment,
+        )
+        adjustments.extend(visual_tail)
+        refined, visual_lead = _maybe_visual_lead_in(
+            refined,
+            all_segments,
+            visual_document,
+            max_gap_seconds=max_gap_seconds,
+            context_padding_seconds=context_padding_seconds,
+            max_duration_seconds=max_duration_seconds,
+            max_lead_in_seconds=max_lead_in_seconds,
+        )
+        adjustments.extend(visual_lead)
     return BoundaryRefinementResult(
         segments=refined,
-        adjustments=[*lead_adjustments, *tail_adjustments],
+        adjustments=adjustments,
+    )
+
+
+def _segment_peak_engagement(segment: SegmentAnalysis) -> float:
+    return max(
+        segment.excitement_score,
+        segment.humor_score,
+        segment.suspense_score,
+        segment.educational_score,
     )
