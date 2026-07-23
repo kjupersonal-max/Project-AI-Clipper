@@ -195,6 +195,23 @@ export type AnalyzeResponse = {
   analysis_path: string;
 };
 
+export type ImportanceBreakdown = {
+  hook: number;
+  emotion: number;
+  story_value: number;
+  information_value: number;
+  retention: number;
+  shareability: number;
+  standalone_quality: number;
+  monetization_potential: number;
+};
+
+export type VisualEvidence = {
+  provider?: string | null;
+  model?: string | null;
+  notes?: string[];
+};
+
 export type ClipCandidate = {
   clip_id: string;
   start: number;
@@ -212,6 +229,22 @@ export type ClipCandidate = {
   title_suggestion: string;
   reason: string;
   status: string;
+  warnings?: string[];
+  score_breakdown?: Record<string, number>;
+  importance_breakdown?: ImportanceBreakdown | null;
+  selection_reasons?: string[];
+  visual_evidence?: VisualEvidence | null;
+};
+
+export type RejectedClipCandidate = {
+  clip_id: string;
+  start: number;
+  end: number;
+  duration: number;
+  score: number;
+  rejection_reason: string;
+  reason?: string;
+  importance_breakdown?: ImportanceBreakdown | null;
 };
 
 export type ClipCandidatesDocument = {
@@ -223,6 +256,9 @@ export type ClipCandidatesDocument = {
   max_candidates: number;
   source_duration_seconds: number;
   candidates: ClipCandidate[];
+  rejected_candidates?: RejectedClipCandidate[];
+  quality_threshold?: number | null;
+  selection_pipeline_version?: string | null;
   created_at: string;
 };
 

@@ -77,6 +77,15 @@ function ScorePill({ label, value }: { label: string; value: number }) {
   );
 }
 
+function ImportancePill({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md border border-zinc-800/80 bg-zinc-900/50 px-2 py-1">
+      <p className="text-[10px] uppercase tracking-wider text-zinc-500">{label}</p>
+      <p className="text-xs font-medium text-zinc-200">{value.toFixed(1)}</p>
+    </div>
+  );
+}
+
 function ClipCandidateCard({
   candidate,
   rank,
@@ -102,6 +111,11 @@ function ClipCandidateCard({
 }) {
   const captionStatus = captionState?.status ?? "not_generated";
   const captionBusy = captionStatus === "generating";
+  const importance = candidate.importance_breakdown;
+  const selectionReasons =
+    candidate.selection_reasons && candidate.selection_reasons.length > 0
+      ? candidate.selection_reasons
+      : [candidate.reason];
 
   return (
     <div className="overflow-hidden rounded-lg border border-amber-500/30 bg-zinc-950/50 ring-1 ring-amber-500/10">
@@ -158,6 +172,35 @@ function ClipCandidateCard({
           <ScorePill label="Context dep." value={candidate.context_dependency_score} />
         </div>
 
+        {importance ? (
+          <details className="rounded-md border border-zinc-800/80 bg-zinc-950/40 px-3 py-2">
+            <summary className="cursor-pointer text-xs font-medium text-zinc-400">
+              Importance breakdown
+            </summary>
+            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <ImportancePill label="Hook" value={importance.hook} />
+              <ImportancePill label="Emotion" value={importance.emotion} />
+              <ImportancePill label="Story" value={importance.story_value} />
+              <ImportancePill label="Info" value={importance.information_value} />
+              <ImportancePill label="Retention" value={importance.retention} />
+              <ImportancePill label="Share" value={importance.shareability} />
+              <ImportancePill label="Standalone" value={importance.standalone_quality} />
+              <ImportancePill label="Monetize" value={importance.monetization_potential} />
+            </div>
+          </details>
+        ) : null}
+
+        {candidate.warnings && candidate.warnings.length > 0 ? (
+          <div className="rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2">
+            <p className="text-[10px] uppercase tracking-wider text-amber-300/80">Warnings</p>
+            <ul className="mt-1 space-y-1 text-xs text-amber-100/90">
+              {candidate.warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
         {onGenerateCaptions || onEditCaptions || onExport ? (
           <div className="space-y-3 border-t border-zinc-800/80 pt-3">
             {onGenerateCaptions || onEditCaptions ? (
@@ -211,8 +254,12 @@ function ClipCandidateCard({
       </div>
 
       <div className="border-t border-amber-500/20 bg-amber-500/5 px-4 py-3">
-        <p className="text-xs uppercase tracking-wider text-amber-300/80">Selection reason</p>
-        <p className="mt-1 text-sm text-amber-100/90">{candidate.reason}</p>
+        <p className="text-xs uppercase tracking-wider text-amber-300/80">Why this clip</p>
+        <ul className="mt-1 space-y-1 text-sm text-amber-100/90">
+          {selectionReasons.map((item) => (
+            <li key={item}>• {item}</li>
+          ))}
+        </ul>
       </div>
     </div>
   );

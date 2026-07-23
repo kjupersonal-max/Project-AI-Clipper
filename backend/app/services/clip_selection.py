@@ -22,6 +22,18 @@ from app.models.project import (
     TranscriptSegment,
 )
 from app.services.pipeline_timing import log_stage_event, log_timing_summary
+from app.services.clip_boundary_refinement import refine_clip_segment_boundaries
+from app.services.clip_importance import (
+    assess_candidate_weakness,
+    build_human_reason,
+    build_selection_reasons,
+    build_selection_warnings,
+    compute_importance_breakdown,
+    empty_visual_evidence,
+    global_importance_selection,
+    importance_breakdown_to_score_dict,
+    importance_total_score,
+)
 from app.services.project_store import (
     get_clip_candidates_output_dir,
     get_clip_candidates_output_path,
@@ -742,7 +754,37 @@ def _build_candidate(
         duration=duration,
         options=options,
     )
-    if score < options.min_score:
+    importance = compute_importance_breakdown(
+        segments,
+        hook_score=hook_score,
+        payoff_score=payoff_score,
+        standalone_score=standalone_score,
+        context_dependency_score=context_dependency_score,
+        primary_emotion=primary_emotion,
+    )
+    importance_score = importance_total_score(importance)
+    score = round((score * 0.35) + (importance_score * 0.65), 1)
+    score_breakdown.update(importance_breakdown_to_score_dict(importance))
+    score_breakdown["legacy_score_component"] = round(score - importance_score * 0.65, 2)
+    score_breakdown["importance_total"] = importance_score
+
+    weakness = assess_candidate_weakness(
+        segments,
+        hook_score=hook_score,
+        payoff_score=payoff_score,
+        standalone_score=standalone_score,
+        context_dependency_score=context_dependency_score,
+        importance=importance,
+        total_score=score,
+        min_score=options.min_score,
+    )
+    if weakness.reject:
+        logger.info(
+            "Rejected weak candidate %.2f-%.2f: %s",
+            start,
+            end,
+            weakness.reason,
+        )
         return None
 
     confidence = _compute_confidence(
@@ -750,6 +792,26 @@ def _build_candidate(
         score=score,
         standalone_score=standalone_score,
         context_dependency_score=context_dependency_score,
+    )
+    selection_reasons = build_selection_reasons(
+        importance,
+        hook_score=hook_score,
+        payoff_score=payoff_score,
+        primary_emotion=primary_emotion,
+    )
+    warnings.extend(
+        build_selection_warnings(
+            segments,
+            hook_score=hook_score,
+            context_dependency_score=context_dependency_score,
+            importance=importance,
+            confidence=confidence,
+        )
+    )
+    reason = build_human_reason(
+        selection_reasons,
+        total_score=score,
+        importance=importance,
     )
 
     if duration_class is not None:
@@ -771,19 +833,15 @@ def _build_candidate(
         standalone_score=standalone_score,
         context_dependency_score=context_dependency_score,
         title_suggestion=_build_title_suggestion(segments, primary_emotion),
-        reason=_build_reason(
-            segments,
-            hook_score=hook_score,
-            payoff_score=payoff_score,
-            standalone_score=standalone_score,
-            context_dependency_score=context_dependency_score,
-            primary_emotion=primary_emotion,
-        ),
+        reason=reason,
         status=ClipCandidateStatus.PROPOSED,
         warnings=warnings,
         duration_exception_reason=None,
         duration_class=duration_class.label if duration_class is not None else None,
         score_breakdown=score_breakdown,
+        importance_breakdown=importance,
+        selection_reasons=selection_reasons,
+        visual_evidence=empty_visual_evidence(),
     )
 
 
@@ -880,6 +938,112 @@ def _quality_first_final_selection(
 
     selected.sort(key=lambda candidate: candidate.start)
     return selected
+
+
+def _duration_class_limits(duration_class: str | None) -> tuple[float, float]:
+    if duration_class == "medium":
+        return (
+            settings.clip_selection_medium_min_seconds,
+            settings.clip_selection_medium_max_seconds,
+        )
+    if duration_class == "long":
+        return (
+            settings.clip_selection_long_min_seconds,
+            settings.clip_selection_long_max_seconds,
+        )
+    return (
+        settings.clip_selection_short_min_seconds,
+        settings.clip_selection_short_max_seconds,
+    )
+
+
+def _refine_final_candidate_boundaries(
+    candidate: ClipCandidate,
+    analysis_segments: list[SegmentAnalysis],
+    transcript_segments: dict[int, TranscriptSegment],
+    *,
+    source_duration: float,
+    max_gap_seconds: float,
+    context_padding_seconds: float,
+) -> ClipCandidate:
+    by_id = _ordered_segments_by_id(analysis_segments)
+    core_segments = [
+        by_id[segment_id]
+        for segment_id in candidate.segment_ids
+        if segment_id in by_id
+    ]
+    if not core_segments:
+        return candidate
+
+    _, max_duration = _duration_class_limits(candidate.duration_class)
+    refinement = refine_clip_segment_boundaries(
+        core_segments,
+        analysis_segments,
+        max_gap_seconds=max_gap_seconds,
+        context_padding_seconds=context_padding_seconds,
+        max_duration_seconds=max_duration,
+        min_tail_seconds=settings.clip_selection_post_payoff_tail_min_seconds,
+        max_tail_seconds=settings.clip_selection_post_payoff_tail_max_seconds,
+        max_lead_in_seconds=settings.clip_selection_lead_in_max_seconds,
+    )
+    try:
+        refined_segments = _validate_candidate_segments(
+            refinement.segments,
+            source_duration=source_duration,
+            known_segment_ids=set(by_id),
+        )
+    except ClipSelectionProcessError:
+        return candidate
+
+    start = round(refined_segments[0].start, 3)
+    end = round(refined_segments[-1].end, 3)
+    duration = round(end - start, 3)
+    if duration + 0.01 < settings.clip_selection_min_duration_seconds:
+        return candidate
+
+    warnings = list(candidate.warnings)
+    for adjustment in refinement.adjustments:
+        if adjustment.direction == "end":
+            warnings.append(
+                f"Extended end by {adjustment.seconds:.1f}s for a natural completion after the payoff."
+            )
+        elif adjustment.direction == "start":
+            warnings.append(
+                f"Added {adjustment.seconds:.1f}s lead-in for clearer standalone context."
+            )
+
+    return candidate.model_copy(
+        update={
+            "start": start,
+            "end": end,
+            "duration": duration,
+            "segment_ids": [segment.segment_id for segment in refined_segments],
+            "transcript_text": _build_transcript_text(refined_segments, transcript_segments),
+            "warnings": warnings,
+        }
+    )
+
+
+def _refine_final_candidates_boundaries(
+    candidates: list[ClipCandidate],
+    analysis_segments: list[SegmentAnalysis],
+    transcript_segments: dict[int, TranscriptSegment],
+    *,
+    source_duration: float,
+    max_gap_seconds: float,
+    context_padding_seconds: float,
+) -> list[ClipCandidate]:
+    return [
+        _refine_final_candidate_boundaries(
+            candidate,
+            analysis_segments,
+            transcript_segments,
+            source_duration=source_duration,
+            max_gap_seconds=max_gap_seconds,
+            context_padding_seconds=context_padding_seconds,
+        )
+        for candidate in candidates
+    ]
 
 
 def _validate_final_candidates(
@@ -1088,15 +1252,27 @@ def select_project_clips(
 
         ranking_started = time.perf_counter()
         deduplicated = _deduplicate_candidates(raw_candidates)
-        final_candidates = _quality_first_final_selection(
+        quality_threshold = max(
+            options.min_score,
+            settings.clip_selection_quality_threshold,
+        )
+        final_candidates, rejected_candidates = global_importance_selection(
             deduplicated,
             max_count=options.max_candidates,
-            min_score=options.min_score,
+            quality_threshold=quality_threshold,
             source_duration=source_duration,
         )
         final_candidates = _validate_final_candidates(
             final_candidates,
             source_duration=source_duration,
+        )
+        final_candidates = _refine_final_candidates_boundaries(
+            final_candidates,
+            analysis.segments,
+            transcript_segments,
+            source_duration=source_duration,
+            max_gap_seconds=options.max_gap_seconds,
+            context_padding_seconds=options.context_padding_seconds,
         )
         log_stage_event(
             "ranking_candidates",
@@ -1116,6 +1292,8 @@ def select_project_clips(
             max_candidates=options.max_candidates,
             source_duration_seconds=source_duration,
             candidates=final_candidates,
+            rejected_candidates=rejected_candidates[:20],
+            quality_threshold=quality_threshold,
             selection_pipeline_version=settings.clip_selection_pipeline_version,
             analysis_pipeline_version=settings.analysis_pipeline_version,
         )

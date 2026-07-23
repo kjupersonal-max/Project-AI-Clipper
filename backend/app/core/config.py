@@ -82,7 +82,11 @@ class Settings(BaseSettings):
     clip_selection_hard_max_candidates: int = 10
     clip_selection_max_seed_groups: int = 12
     clip_selection_min_score: float = 40.0
-    clip_selection_pipeline_version: str = "3"
+    clip_selection_quality_threshold: float = 52.0
+    clip_selection_post_payoff_tail_min_seconds: float = 1.0
+    clip_selection_post_payoff_tail_max_seconds: float = 4.0
+    clip_selection_lead_in_max_seconds: float = 4.0
+    clip_selection_pipeline_version: str = "5"
     clip_selection_preferred_target_max_seconds: float = 30.0
     clip_export_min_duration_seconds: float = 15.0
     clip_export_max_duration_seconds: float = 120.0

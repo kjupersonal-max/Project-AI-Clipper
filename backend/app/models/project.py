@@ -309,6 +309,50 @@ class ClipCandidateStatus(str, Enum):
     REJECTED = "rejected"
 
 
+class ImportanceBreakdown(BaseModel):
+    hook: float = Field(ge=0.0, le=10.0)
+    emotion: float = Field(ge=0.0, le=10.0)
+    story_value: float = Field(ge=0.0, le=10.0)
+    information_value: float = Field(ge=0.0, le=10.0)
+    retention: float = Field(ge=0.0, le=10.0)
+    shareability: float = Field(ge=0.0, le=10.0)
+    standalone_quality: float = Field(ge=0.0, le=10.0)
+    monetization_potential: float = Field(ge=0.0, le=10.0)
+
+
+class VisualSignalScores(BaseModel):
+    face_presence: float | None = Field(default=None, ge=0.0, le=10.0)
+    facial_reaction: float | None = Field(default=None, ge=0.0, le=10.0)
+    motion_spike: float | None = Field(default=None, ge=0.0, le=10.0)
+    scene_change: float | None = Field(default=None, ge=0.0, le=10.0)
+    person_entering: float | None = Field(default=None, ge=0.0, le=10.0)
+    person_leaving: float | None = Field(default=None, ge=0.0, le=10.0)
+    hiding: float | None = Field(default=None, ge=0.0, le=10.0)
+    fear: float | None = Field(default=None, ge=0.0, le=10.0)
+    laughter: float | None = Field(default=None, ge=0.0, le=10.0)
+    physical_action: float | None = Field(default=None, ge=0.0, le=10.0)
+    object_reveal: float | None = Field(default=None, ge=0.0, le=10.0)
+
+
+class VisualEvidence(BaseModel):
+    provider: str | None = None
+    model: str | None = None
+    signals: VisualSignalScores = Field(default_factory=VisualSignalScores)
+    notes: list[str] = Field(default_factory=list)
+
+
+class RejectedClipCandidate(BaseModel):
+    clip_id: str
+    start: float = Field(ge=0.0)
+    end: float = Field(gt=0.0)
+    duration: float = Field(gt=0.0)
+    score: float = Field(ge=0.0, le=100.0)
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
+    importance_breakdown: ImportanceBreakdown | None = None
+    reason: str = ""
+    rejection_reason: str
+
+
 class ClipCandidate(BaseModel):
     clip_id: str
     start: float = Field(ge=0.0)
@@ -330,6 +374,9 @@ class ClipCandidate(BaseModel):
     duration_exception_reason: str | None = None
     duration_class: str | None = None
     score_breakdown: dict[str, float] = Field(default_factory=dict)
+    importance_breakdown: ImportanceBreakdown | None = None
+    selection_reasons: list[str] = Field(default_factory=list)
+    visual_evidence: VisualEvidence | None = None
 
 
 class ClipCandidatesDocument(BaseModel):
@@ -341,6 +388,8 @@ class ClipCandidatesDocument(BaseModel):
     max_candidates: int
     source_duration_seconds: float
     candidates: list[ClipCandidate]
+    rejected_candidates: list[RejectedClipCandidate] = Field(default_factory=list)
+    quality_threshold: float | None = None
     selection_pipeline_version: str | None = None
     analysis_pipeline_version: str | None = None
     created_at: str = Field(default_factory=utc_now_iso)
