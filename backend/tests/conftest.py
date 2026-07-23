@@ -12,6 +12,29 @@ from app.services.project_store import create_project_metadata, load_project
 
 
 @pytest.fixture(autouse=True)
+def mock_clip_quality_transcript_loader(monkeypatch, request):
+    if request.node.get_closest_marker("no_clip_quality_mock"):
+        return
+
+    from app.services.clip_captions import ClipCaptionsGenerationError
+    from app.services.transcript_store import load_workflow_transcript
+    from app.services.transcription import TranscriptNotFoundError
+
+    def _loader(**kwargs):
+        try:
+            return load_workflow_transcript(kwargs["project_id"])
+        except TranscriptNotFoundError as exc:
+            raise ClipCaptionsGenerationError(
+                "No transcript available. Transcribe the project before generating captions."
+            ) from exc
+
+    monkeypatch.setattr(
+        "app.services.clip_captions.load_or_retranscribe_clip_quality_transcript",
+        _loader,
+    )
+
+
+@pytest.fixture(autouse=True)
 def isolate_analysis_settings(monkeypatch):
     """Keep tests offline and deterministic regardless of backend/.env."""
     monkeypatch.setattr(settings, "analysis_provider", "heuristic")

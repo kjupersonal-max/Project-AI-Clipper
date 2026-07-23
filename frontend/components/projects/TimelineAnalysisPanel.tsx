@@ -4,14 +4,7 @@ import {
   defaultAnalysisFilters,
   filterSegmentAnalysis,
 } from "@/lib/analysis-filters";
-import type { CandidateExportState } from "@/lib/clip-export";
-import {
-  buildExportKeyFromSegment,
-  isCandidateExported,
-  isCandidateExporting,
-} from "@/lib/clip-export";
 import { Badge } from "@/components/ui/Badge";
-import { ClipExportButton } from "@/components/projects/ClipExportButton";
 import { cn, formatDuration } from "@/lib/utils";
 import { AlertTriangle, ChevronDown, Clock3, Loader2, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -20,9 +13,6 @@ type TimelineAnalysisPanelProps = {
   analysis: AnalysisDocument;
   filters?: AnalysisFilters;
   onSeek: (seconds: number) => void;
-  exportStates?: Record<string, CandidateExportState>;
-  exportedCandidateIds?: ReadonlySet<string>;
-  onExportSegment?: (segment: SegmentAnalysis) => void;
 };
 
 function formatTimestamp(seconds: number): string {
@@ -65,29 +55,16 @@ function SegmentAnalysisCard({
   expanded,
   onToggle,
   onSeek,
-  exportState,
-  isExported,
-  isExporting,
-  onExportSegment,
 }: {
   segment: SegmentAnalysis;
   expanded: boolean;
   onToggle: () => void;
   onSeek: (seconds: number) => void;
-  exportState?: CandidateExportState;
-  isExported: boolean;
-  isExporting: boolean;
-  onExportSegment?: (segment: SegmentAnalysis) => void;
 }) {
+  const segmentDuration = Math.max(0, segment.end - segment.start);
+
   return (
-    <div
-      className={cn(
-        "overflow-hidden rounded-lg border bg-zinc-950/50",
-        segment.clip_candidate
-          ? "border-amber-500/40 ring-1 ring-amber-500/20"
-          : "border-zinc-800",
-      )}
-    >
+    <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/50">
       <div className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-zinc-900/70">
         <button
           type="button"
@@ -108,12 +85,10 @@ function SegmentAnalysisCard({
             <TimestampButton seconds={segment.start} onSeek={onSeek} />
             <span className="text-xs text-zinc-600">→</span>
             <TimestampButton seconds={segment.end} onSeek={onSeek} />
+            <Badge variant="muted">{formatDuration(segmentDuration)}</Badge>
             <Badge variant="info">{segment.emotion}</Badge>
             {segment.clip_candidate ? (
-              <Badge variant="warning">Clip candidate</Badge>
-            ) : null}
-            {segment.clip_candidate && isExported ? (
-              <Badge variant="success">Exported</Badge>
+              <Badge variant="warning">Analysis signal</Badge>
             ) : null}
           </div>
 
@@ -141,29 +116,18 @@ function SegmentAnalysisCard({
             <ScorePill label="Standalone" value={segment.standalone_score} />
             <ScorePill label="Context dep." value={segment.context_dependency_score} />
           </div>
-
-          {segment.clip_candidate && onExportSegment ? (
-            <div className="border-t border-zinc-800/80 pt-3">
-              <ClipExportButton
-                exportState={exportState}
-                isExported={isExported}
-                isExporting={isExporting}
-                onExport={() => onExportSegment(segment)}
-              />
-            </div>
-          ) : null}
         </div>
       </div>
 
       {expanded ? (
         <div className="border-t border-zinc-800/80 px-4 py-3">
-          <p className="text-xs uppercase tracking-wider text-zinc-500">Reason</p>
+          <p className="text-xs uppercase tracking-wider text-zinc-500">Analysis reason</p>
           <p className="mt-2 text-sm leading-6 text-zinc-300">{segment.reason}</p>
-        </div>
-      ) : segment.clip_candidate ? (
-        <div className="border-t border-amber-500/20 bg-amber-500/5 px-4 py-3">
-          <p className="text-xs uppercase tracking-wider text-amber-300/80">Candidate reason</p>
-          <p className="mt-1 text-sm text-amber-100/90">{segment.reason}</p>
+          {segment.clip_candidate ? (
+            <p className="mt-3 text-xs text-zinc-500">
+              Internal analysis signal only. Use Select Clips to review final proposed clips.
+            </p>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -174,13 +138,8 @@ export function TimelineAnalysisPanel({
   analysis,
   filters = defaultAnalysisFilters,
   onSeek,
-  exportStates = {},
-  exportedCandidateIds = new Set<string>(),
-  onExportSegment,
 }: TimelineAnalysisPanelProps) {
-  const [expandedSegments, setExpandedSegments] = useState<Set<number>>(
-    () => new Set(analysis.segments.filter((segment) => segment.clip_candidate).map((s) => s.segment_id)),
-  );
+  const [expandedSegments, setExpandedSegments] = useState<Set<number>>(new Set());
 
   const filteredSegments = useMemo(
     () => filterSegmentAnalysis(analysis.segments, filters),
@@ -201,6 +160,17 @@ export function TimelineAnalysisPanel({
 
   return (
     <div className="space-y-5">
+      <div className="flex items-start gap-3 rounded-lg border border-zinc-800 bg-zinc-950/40 px-4 py-3">
+        <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-zinc-400" />
+        <div>
+          <p className="text-sm font-medium text-zinc-200">Internal timeline analysis</p>
+          <p className="mt-1 text-sm text-zinc-500">
+            Transcript segments with scoring signals for inspection. These are not final clips and
+            cannot be exported here. Run Select Clips to review proposed clip candidates.
+          </p>
+        </div>
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
           <p className="text-xs uppercase tracking-wider text-zinc-500">Provider</p>
@@ -214,7 +184,7 @@ export function TimelineAnalysisPanel({
           <p className="mt-2 text-sm font-medium text-zinc-100">{analysis.segment_count}</p>
         </div>
         <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
-          <p className="text-xs uppercase tracking-wider text-zinc-500">Clip candidates</p>
+          <p className="text-xs uppercase tracking-wider text-zinc-500">Analysis signals</p>
           <p className="mt-2 text-sm font-medium text-amber-200">{analysis.clip_candidate_count}</p>
         </div>
         <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
@@ -254,27 +224,12 @@ export function TimelineAnalysisPanel({
             </p>
           </div>
         </div>
-      ) : (
-        <div className="flex items-start gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
-          <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
-          <p className="text-sm text-emerald-100">
-            Timeline analysis generated by configured provider{" "}
-            <span className="font-medium capitalize">{analysis.provider}</span>
-            {analysis.model ? (
-              <>
-                {" "}
-                (<span className="font-mono">{analysis.model}</span>)
-              </>
-            ) : null}
-            .
-          </p>
-        </div>
-      )}
+      ) : null}
 
       <div className="space-y-3">
         <div className="flex items-center justify-between gap-3">
           <h3 className="text-sm font-medium text-zinc-200">
-            Timeline segments ({filteredSegments.length})
+            Transcript analysis segments ({filteredSegments.length})
           </h3>
           <p className="text-xs text-zinc-500">Click timestamps to seek the video preview</p>
         </div>
@@ -285,27 +240,15 @@ export function TimelineAnalysisPanel({
           </p>
         ) : (
           <div className="space-y-2">
-            {filteredSegments.map((segment) => {
-              const exportKey = buildExportKeyFromSegment(segment);
-
-              return (
-                <SegmentAnalysisCard
-                  key={segment.segment_id}
-                  segment={segment}
-                  expanded={expandedSegments.has(segment.segment_id)}
-                  onToggle={() => toggleSegment(segment.segment_id)}
-                  onSeek={onSeek}
-                  exportState={exportStates[exportKey]}
-                  isExported={isCandidateExported(
-                    exportKey,
-                    exportedCandidateIds,
-                    exportStates,
-                  )}
-                  isExporting={isCandidateExporting(exportKey, exportStates)}
-                  onExportSegment={segment.clip_candidate ? onExportSegment : undefined}
-                />
-              );
-            })}
+            {filteredSegments.map((segment) => (
+              <SegmentAnalysisCard
+                key={segment.segment_id}
+                segment={segment}
+                expanded={expandedSegments.has(segment.segment_id)}
+                onToggle={() => toggleSegment(segment.segment_id)}
+                onSeek={onSeek}
+              />
+            ))}
           </div>
         )}
       </div>

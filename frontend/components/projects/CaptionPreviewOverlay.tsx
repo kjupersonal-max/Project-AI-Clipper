@@ -18,6 +18,7 @@ type CaptionPreviewOverlayProps = {
   segments: CaptionSegment[];
   style: CaptionStyle;
   showSafeAreaGuides?: boolean;
+  playbackTimeOffset?: number;
 };
 
 type SafeAreaGuideProps = {
@@ -64,6 +65,7 @@ function CaptionPreviewOverlayInner({
   segments,
   style,
   showSafeAreaGuides = false,
+  playbackTimeOffset = 0,
 }: CaptionPreviewOverlayProps) {
   const [currentTime, setCurrentTime] = useState(0);
   const [reducedMotion, setReducedMotion] = useState(() => {
@@ -122,9 +124,13 @@ function CaptionPreviewOverlayInner({
     };
   }, [videoRef]);
 
-  const activeSegment = findActiveCaption(segments, currentTime);
+  const activeSegment = findActiveCaption(segments, Math.max(0, currentTime - playbackTimeOffset));
   const displayState = activeSegment
-    ? resolveCaptionDisplayState(activeSegment, currentTime, style.words_per_group)
+    ? resolveCaptionDisplayState(
+        activeSegment,
+        Math.max(0, currentTime - playbackTimeOffset),
+        style.words_per_group,
+      )
     : null;
 
   const groupKey = displayState

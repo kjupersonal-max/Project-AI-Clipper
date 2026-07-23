@@ -5,8 +5,11 @@ from app.api.routes.caption_presets import router as caption_presets_router
 from app.api.routes.projects import router as projects_router
 from app.api.routes.uploads import router as uploads_router
 from app.core.config import settings
+from app.core.logging_config import configure_logging
 from app.services.project_store import ensure_backend_dirs
 from app.services.video_processing import check_ffmpeg_availability, resolve_ffmpeg_executables
+
+configure_logging(settings.log_level)
 
 app = FastAPI(title=settings.app_name)
 
@@ -25,6 +28,7 @@ app.include_router(caption_presets_router)
 
 @app.on_event("startup")
 def on_startup() -> None:
+    configure_logging(settings.log_level)
     ensure_backend_dirs()
     ffmpeg_path, ffprobe_path = resolve_ffmpeg_executables()
     print(f"Resolved FFmpeg executable: {ffmpeg_path or 'not found'}")

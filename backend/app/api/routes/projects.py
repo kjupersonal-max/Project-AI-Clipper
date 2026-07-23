@@ -1,3 +1,6 @@
+import logging
+import time
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
@@ -20,13 +23,30 @@ from app.models.project import (
     RenameClipRequest,
     SelectClipsRequest,
     SelectClipsResponse,
+    TranscribeRequest,
+    TranscriptTier,
     TranscribeResponse,
+    TranscriptionDiagnosticsRequest,
     TranscriptDocument,
     UpdateCaptionsRequest,
     UpdateCaptionStyleRequest,
+    RetranscribeRangeRequest,
+    RetranscribeRangePreviewResponse,
+    ApplyRetranscribeRangeRequest,
+    InsertCaptionWordRequest,
+    InsertCaptionSegmentRequest,
+    SplitCaptionSegmentRequest,
+    MergeCaptionSegmentsRequest,
+    NudgeCaptionTimingRequest,
+    DeleteCaptionWordRequest,
+    UpdateVocabularyHintsRequest,
+    TranscriptionQualityResponse,
     project_to_response,
     utc_now_iso,
 )
+from app.core.config import settings
+from app.services.audio_preprocessing import analyze_channel_levels
+from app.services.pipeline_timing import log_stage_event, log_timing_summary, log_transcription_trace
 from app.services.project_store import (
     get_relative_analysis_path,
     get_relative_clip_candidates_path,
@@ -45,6 +65,7 @@ from app.services.clip_selection import (
     ClipSelectionTranscriptRequiredError,
     InvalidAnalysisForSelectionError,
     cleanup_clip_candidates_output,
+    invalidate_stale_clip_candidates,
     load_project_clip_candidates,
     select_project_clips,
 )
@@ -59,12 +80,22 @@ from app.services.clip_captions import (
     ClipCaptionsGenerationError,
     ClipCaptionsNotFoundError,
     ClipCaptionsValidationError,
+    apply_retranscribe_range,
     generate_clip_captions,
     get_clip_captions,
+    get_transcription_quality,
+    manual_delete_word,
+    manual_insert_segment,
+    manual_insert_word,
+    manual_merge_segments,
+    manual_nudge_timing,
+    manual_split_segment,
+    preview_retranscribe_range,
     reset_clip_captions,
     reset_clip_caption_style,
     update_clip_captions,
     update_clip_caption_style,
+    update_vocabulary_hints,
 )
 from app.services.clip_export import (
     ClipExportNotFoundError,
@@ -96,7 +127,13 @@ from app.services.transcription import (
     WhisperModelLoadError,
     cleanup_transcript_output,
     load_project_transcript,
+    locate_project_audio,
     transcribe_project_audio,
+)
+from app.services.streaming_pipeline import run_automated_vod_pipeline
+from app.services.transcript_store import (
+    get_relative_discovery_transcript_path,
+    infer_discovery_language_hint,
 )
 from app.services.video_processing import (
     FFprobeError,
@@ -106,6 +143,7 @@ from app.services.video_processing import (
 )
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)
@@ -349,19 +387,28 @@ def generate_project_clip_captions(project_id: str, clip_id: str) -> ClipCaption
     except ClipExportNotFoundError as exc:
         project = load_project(project_id)
         project.last_error = exc.message
-        project.append_log(f"Caption generation failed: {exc.message}", level="error")
+        project.append_log(f"Caption generation failed at clip_lookup: {exc.message}", level="error")
         save_project(project)
         raise HTTPException(status_code=404, detail=exc.message) from exc
     except ClipCaptionsGenerationError as exc:
         project = load_project(project_id)
         project.last_error = exc.message
-        project.append_log(f"Caption generation failed: {exc.message}", level="error")
+        project.append_log(f"Caption generation failed at caption_build: {exc.message}", level="error")
         save_project(project)
         raise HTTPException(status_code=422, detail=exc.message) from exc
     except ClipCaptionsValidationError as exc:
         project = load_project(project_id)
         project.last_error = exc.message
-        project.append_log(f"Caption generation failed: {exc.message}", level="error")
+        project.append_log(f"Caption generation failed at caption_validation: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+    except TranscriptionProcessError as exc:
+        project = load_project(project_id)
+        project.last_error = exc.message
+        project.append_log(
+            f"Caption generation failed at clip_retranscription: {exc.message}",
+            level="error",
+        )
         save_project(project)
         raise HTTPException(status_code=422, detail=exc.message) from exc
 
@@ -452,6 +499,247 @@ def reset_project_clip_caption_style(
 
     try:
         return reset_clip_caption_style(project_id, clip_id)
+    except ClipExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+
+
+@router.get(
+    "/{project_id}/clips/{clip_id}/captions/transcription-quality",
+    response_model=TranscriptionQualityResponse,
+)
+def get_project_clip_transcription_quality(
+    project_id: str,
+    clip_id: str,
+) -> TranscriptionQualityResponse:
+    validate_project_id(project_id)
+    try:
+        return get_transcription_quality(project_id, clip_id)
+    except ClipExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+
+
+@router.put(
+    "/{project_id}/clips/{clip_id}/captions/vocabulary-hints",
+    response_model=ClipCaptionsResponse,
+)
+def update_project_clip_vocabulary_hints(
+    project_id: str,
+    clip_id: str,
+    request: UpdateVocabularyHintsRequest,
+) -> ClipCaptionsResponse:
+    validate_project_id(project_id)
+    try:
+        return update_vocabulary_hints(project_id, clip_id, request.vocabulary_hints)
+    except ClipExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+
+
+@router.post(
+    "/{project_id}/clips/{clip_id}/captions/retranscribe/preview",
+    response_model=RetranscribeRangePreviewResponse,
+)
+def preview_project_clip_retranscribe_range(
+    project_id: str,
+    clip_id: str,
+    request: RetranscribeRangeRequest,
+) -> RetranscribeRangePreviewResponse:
+    validate_project_id(project_id)
+    try:
+        return preview_retranscribe_range(
+            project_id,
+            clip_id,
+            range_start=request.start_time,
+            range_end=request.end_time,
+            quality_mode=request.quality_mode.value if request.quality_mode else None,
+            vocabulary_hints=request.vocabulary_hints,
+        )
+    except ClipExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+    except TranscriptionProcessError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+    except WhisperModelLoadError as exc:
+        raise HTTPException(status_code=503, detail=exc.message) from exc
+
+
+@router.post(
+    "/{project_id}/clips/{clip_id}/captions/retranscribe/apply",
+    response_model=ClipCaptionsResponse,
+)
+def apply_project_clip_retranscribe_range(
+    project_id: str,
+    clip_id: str,
+    request: ApplyRetranscribeRangeRequest,
+) -> ClipCaptionsResponse:
+    validate_project_id(project_id)
+    try:
+        return apply_retranscribe_range(project_id, clip_id, request)
+    except ClipExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+
+
+@router.post(
+    "/{project_id}/clips/{clip_id}/captions/words",
+    response_model=ClipCaptionsResponse,
+)
+def insert_project_clip_caption_word(
+    project_id: str,
+    clip_id: str,
+    request: InsertCaptionWordRequest,
+) -> ClipCaptionsResponse:
+    validate_project_id(project_id)
+    try:
+        return manual_insert_word(
+            project_id,
+            clip_id,
+            segment_id=request.segment_id,
+            word=request.word,
+            start=request.start,
+            end=request.end,
+        )
+    except ClipExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+
+
+@router.post(
+    "/{project_id}/clips/{clip_id}/captions/segments",
+    response_model=ClipCaptionsResponse,
+)
+def insert_project_clip_caption_segment(
+    project_id: str,
+    clip_id: str,
+    request: InsertCaptionSegmentRequest,
+) -> ClipCaptionsResponse:
+    validate_project_id(project_id)
+    try:
+        return manual_insert_segment(
+            project_id,
+            clip_id,
+            text=request.text,
+            start=request.start,
+            end=request.end,
+        )
+    except ClipExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+
+
+@router.post(
+    "/{project_id}/clips/{clip_id}/captions/segments/split",
+    response_model=ClipCaptionsResponse,
+)
+def split_project_clip_caption_segment(
+    project_id: str,
+    clip_id: str,
+    request: SplitCaptionSegmentRequest,
+) -> ClipCaptionsResponse:
+    validate_project_id(project_id)
+    try:
+        return manual_split_segment(
+            project_id,
+            clip_id,
+            segment_id=request.segment_id,
+            split_time=request.split_time,
+        )
+    except ClipExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+
+
+@router.post(
+    "/{project_id}/clips/{clip_id}/captions/segments/merge",
+    response_model=ClipCaptionsResponse,
+)
+def merge_project_clip_caption_segments(
+    project_id: str,
+    clip_id: str,
+    request: MergeCaptionSegmentsRequest,
+) -> ClipCaptionsResponse:
+    validate_project_id(project_id)
+    try:
+        return manual_merge_segments(
+            project_id,
+            clip_id,
+            first_segment_id=request.first_segment_id,
+            second_segment_id=request.second_segment_id,
+        )
+    except ClipExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+
+
+@router.post(
+    "/{project_id}/clips/{clip_id}/captions/segments/nudge",
+    response_model=ClipCaptionsResponse,
+)
+def nudge_project_clip_caption_timing(
+    project_id: str,
+    clip_id: str,
+    request: NudgeCaptionTimingRequest,
+) -> ClipCaptionsResponse:
+    validate_project_id(project_id)
+    try:
+        return manual_nudge_timing(
+            project_id,
+            clip_id,
+            segment_id=request.segment_id,
+            delta_seconds=request.delta_seconds,
+        )
+    except ClipExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+
+
+@router.post(
+    "/{project_id}/clips/{clip_id}/captions/words/delete",
+    response_model=ClipCaptionsResponse,
+)
+def delete_project_clip_caption_word(
+    project_id: str,
+    clip_id: str,
+    request: DeleteCaptionWordRequest,
+) -> ClipCaptionsResponse:
+    validate_project_id(project_id)
+    try:
+        return manual_delete_word(
+            project_id,
+            clip_id,
+            segment_id=request.segment_id,
+            word_index=request.word_index,
+        )
     except ClipExportNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message) from exc
     except ClipCaptionsNotFoundError as exc:
@@ -612,10 +900,88 @@ def get_project_transcript(project_id: str) -> TranscriptDocument:
         raise HTTPException(status_code=500, detail=exc.message) from exc
 
 
+@router.post("/{project_id}/transcription/diagnostics")
+def run_project_transcription_diagnostics(
+    project_id: str,
+    request: TranscriptionDiagnosticsRequest | None = None,
+) -> dict[str, object]:
+    """Development-only A/B transcription diagnostics for a project or clip range."""
+    if not settings.enable_transcription_diagnostics:
+        raise HTTPException(status_code=404, detail="Transcription diagnostics are disabled.")
+
+    validate_project_id(project_id)
+    body = request or TranscriptionDiagnosticsRequest()
+    load_project(project_id)
+
+    try:
+        audio_path = locate_project_audio(project_id)
+    except TranscriptionAudioNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+
+    temp_dir = (
+        settings.transcripts_dir
+        / settings.transcription_temp_dir_name
+        / project_id
+        / "_diag"
+    )
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        channel_levels = [
+            {
+                "channel": item.channel,
+                "peak_amplitude": item.peak_amplitude,
+                "rms_level": item.rms_level,
+            }
+            for item in analyze_channel_levels(audio_path)
+        ]
+        variants = run_transcription_diagnostics_for_project(
+            project_id=project_id,
+            source_audio_path=audio_path,
+            temp_dir=temp_dir,
+            quality_mode=body.quality_mode.value if body.quality_mode else None,
+            language=body.language,
+            vocabulary_hints=body.vocabulary_hints,
+            clip_start=body.clip_start,
+            clip_end=body.clip_end,
+        )
+        return {
+            "project_id": project_id,
+            "clip_start": body.clip_start,
+            "clip_end": body.clip_end,
+            "channel_levels": channel_levels,
+            "variants": variants,
+        }
+    except WhisperModelLoadError as exc:
+        raise HTTPException(status_code=503, detail=exc.message) from exc
+    except TranscriptionProcessError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+
+
 @router.post("/{project_id}/transcribe", response_model=TranscribeResponse)
-def transcribe_project(project_id: str) -> TranscribeResponse:
+def transcribe_project(
+    project_id: str,
+    request: TranscribeRequest | None = None,
+) -> TranscribeResponse:
     validate_project_id(project_id)
     project = load_project(project_id)
+    body = request or TranscribeRequest()
+    language_hint = infer_discovery_language_hint(
+        project_id,
+        detected_language=project.detected_language,
+    )
+    transcription_path = "balanced" if body.use_full_quality else "discovery"
+
+    log_transcription_trace(
+        event="api_request_start",
+        endpoint=f"POST /api/projects/{project_id}/transcribe",
+        project_id=project_id,
+        transcription_tier="full_quality" if body.use_full_quality else "discovery",
+        transcription_path=transcription_path,
+        use_full_quality=body.use_full_quality,
+        quality_mode=body.quality_mode.value if body.quality_mode else None,
+        language_hint=language_hint,
+    )
 
     started_at = utc_now_iso()
     project.transcription_status = ProcessingStatus.PROCESSING
@@ -624,20 +990,70 @@ def transcribe_project(project_id: str) -> TranscribeResponse:
     project.transcript_path = None
     project.detected_language = None
     project.last_error = None
+    if body.quality_mode:
+        project.transcription_quality_mode = body.quality_mode.value
+    if body.vocabulary_hints is not None:
+        project.vocabulary_hints = body.vocabulary_hints
     project.append_log("Transcription started.")
     save_project(project)
 
+    endpoint_started = time.perf_counter()
+    log_stage_event("api_transcribe", "start", project_id=project_id)
+
     try:
-        document = transcribe_project_audio(project_id)
-        relative_path = get_relative_transcript_path(project_id)
+        document = transcribe_project_audio(
+            project_id,
+            quality_mode=body.quality_mode.value if body.quality_mode else None,
+            vocabulary_hints=body.vocabulary_hints,
+            use_full_quality=body.use_full_quality,
+            language=language_hint,
+        )
+        relative_path = (
+            get_relative_discovery_transcript_path(project_id)
+            if document.transcript_tier == TranscriptTier.DISCOVERY
+            else get_relative_transcript_path(project_id)
+        )
         project = load_project(project_id)
         project.transcription_status = ProcessingStatus.COMPLETED
         project.transcript_path = relative_path
+        if document.transcript_tier == TranscriptTier.DISCOVERY:
+            project.discovery_transcript_path = relative_path
+            project.active_transcript_tier = TranscriptTier.DISCOVERY
+        elif document.transcript_tier == TranscriptTier.FULL_QUALITY:
+            project.active_transcript_tier = TranscriptTier.FULL_QUALITY
         project.detected_language = document.language
         project.transcription_completed_at = utc_now_iso()
         project.last_error = None
         project.append_log("Transcription completed.")
         save_project(project)
+
+        from app.services.transcription_config import resolve_discovery_settings
+
+        resolved_model = (
+            resolve_discovery_settings(language=document.language).model_size
+            if document.transcript_tier == TranscriptTier.DISCOVERY
+            else None
+        )
+        log_transcription_trace(
+            event="api_request_completed",
+            endpoint=f"POST /api/projects/{project_id}/transcribe",
+            project_id=project_id,
+            transcription_tier=document.transcript_tier.value if document.transcript_tier else None,
+            transcription_path=transcription_path,
+            model_name=resolved_model,
+            use_full_quality=body.use_full_quality,
+            total_wall_seconds=time.perf_counter() - endpoint_started,
+            segment_count=document.segment_count,
+            detected_language=document.language,
+        )
+        log_timing_summary(
+            project_id=project_id,
+            pipeline="api_transcribe",
+            total_seconds=time.perf_counter() - endpoint_started,
+            status="completed",
+            segment_count=document.segment_count,
+            word_count=document.word_count,
+        )
 
         return TranscribeResponse(
             project_id=project_id,
@@ -647,9 +1063,19 @@ def transcribe_project(project_id: str) -> TranscribeResponse:
             segment_count=document.segment_count,
             word_count=document.word_count,
             transcript_path=relative_path,
+            transcript_tier=document.transcript_tier,
+            quality_mode=document.quality_mode,
+            quality_rating=document.quality_rating,
+            warnings=document.quality_warnings,
         )
     except HTTPException as exc:
         cleanup_transcript_output(project_id)
+        log_timing_summary(
+            project_id=project_id,
+            pipeline="api_transcribe",
+            total_seconds=time.perf_counter() - endpoint_started,
+            status="failed",
+        )
         project = load_project(project_id)
         project.transcription_status = ProcessingStatus.FAILED
         detail = exc.detail if isinstance(exc.detail, str) else "Transcription failed."
@@ -659,6 +1085,12 @@ def transcribe_project(project_id: str) -> TranscribeResponse:
         save_project(project)
         raise
     except TranscriptionAudioNotFoundError as exc:
+        log_timing_summary(
+            project_id=project_id,
+            pipeline="api_transcribe",
+            total_seconds=time.perf_counter() - endpoint_started,
+            status="failed",
+        )
         project = load_project(project_id)
         project.transcription_status = ProcessingStatus.FAILED
         project.last_error = exc.message
@@ -668,6 +1100,12 @@ def transcribe_project(project_id: str) -> TranscribeResponse:
         raise HTTPException(status_code=404, detail=exc.message) from exc
     except WhisperModelLoadError as exc:
         cleanup_transcript_output(project_id)
+        log_timing_summary(
+            project_id=project_id,
+            pipeline="api_transcribe",
+            total_seconds=time.perf_counter() - endpoint_started,
+            status="failed",
+        )
         project = load_project(project_id)
         project.transcription_status = ProcessingStatus.FAILED
         project.last_error = exc.message
@@ -677,6 +1115,12 @@ def transcribe_project(project_id: str) -> TranscribeResponse:
         raise HTTPException(status_code=503, detail=exc.message) from exc
     except TranscriptionProcessError as exc:
         cleanup_transcript_output(project_id)
+        log_timing_summary(
+            project_id=project_id,
+            pipeline="api_transcribe",
+            total_seconds=time.perf_counter() - endpoint_started,
+            status="failed",
+        )
         project = load_project(project_id)
         project.transcription_status = ProcessingStatus.FAILED
         project.last_error = exc.message
@@ -684,6 +1128,34 @@ def transcribe_project(project_id: str) -> TranscribeResponse:
         project.append_log(f"Transcription failed: {exc.message}", level="error")
         save_project(project)
         raise HTTPException(status_code=422, detail=exc.message) from exc
+    finally:
+        project = load_project(project_id)
+        if project.transcription_status == ProcessingStatus.PROCESSING:
+            project.transcription_status = ProcessingStatus.FAILED
+            project.transcription_completed_at = utc_now_iso()
+            project.last_error = project.last_error or "Transcription did not complete."
+            project.append_log("Transcription ended without completion.", level="error")
+            save_project(project)
+
+
+@router.post("/{project_id}/automated-pipeline")
+def run_project_automated_pipeline(project_id: str) -> dict[str, object]:
+    validate_project_id(project_id)
+    project = load_project(project_id)
+    project.append_log("Automated VOD pipeline started.")
+    save_project(project)
+    try:
+        result = run_automated_vod_pipeline(project_id)
+        project = load_project(project_id)
+        project.append_log("Automated VOD pipeline completed.")
+        save_project(project)
+        return {"project_id": project_id, "status": "completed", **result}
+    except Exception as exc:
+        project = load_project(project_id)
+        project.last_error = str(exc)
+        project.append_log(f"Automated VOD pipeline failed: {exc}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/analysis/provider-diagnostics")
@@ -718,6 +1190,9 @@ def analyze_project(project_id: str) -> AnalyzeResponse:
     project.append_log("Timeline analysis started.")
     save_project(project)
 
+    endpoint_started = time.perf_counter()
+    log_stage_event("api_analyze", "start", project_id=project_id)
+
     def restore_previous_analysis_state(*, detail: str, level: str = "error") -> None:
         nonlocal project
         project = load_project(project_id)
@@ -746,14 +1221,29 @@ def analyze_project(project_id: str) -> AnalyzeResponse:
     try:
         document = analyze_project_timeline(project_id)
         relative_path = get_relative_analysis_path(project_id)
+        cleanup_clip_candidates_output(project_id)
         project = load_project(project_id)
         project.analysis_status = ProcessingStatus.COMPLETED
+        project.analysis_stage = "completed"
+        project.analysis_progress_pct = 100.0
         project.analysis_path = relative_path
         project.analysis_provider = document.provider
         project.analysis_completed_at = utc_now_iso()
+        project.clip_selection_status = ProcessingStatus.PENDING
+        project.clip_candidates_path = None
+        project.clip_candidate_count = None
         project.last_error = None
         project.append_log("Timeline analysis completed.")
         save_project(project)
+
+        log_timing_summary(
+            project_id=project_id,
+            pipeline="api_analyze",
+            total_seconds=time.perf_counter() - endpoint_started,
+            status="completed",
+            segment_count=document.segment_count,
+            clip_candidate_count=document.clip_candidate_count,
+        )
 
         return AnalyzeResponse(
             project_id=project_id,
@@ -788,12 +1278,25 @@ def analyze_project(project_id: str) -> AnalyzeResponse:
     except AnalysisProcessError as exc:
         cleanup_failed_analysis_output()
         restore_previous_analysis_state(detail=exc.message)
+        project = load_project(project_id)
+        project.analysis_stage = "failed"
+        save_project(project)
         raise HTTPException(status_code=422, detail=exc.message) from exc
+    finally:
+        project = load_project(project_id)
+        if project.analysis_status == ProcessingStatus.PROCESSING:
+            project.analysis_status = ProcessingStatus.FAILED
+            project.analysis_stage = "failed"
+            project.analysis_completed_at = utc_now_iso()
+            project.last_error = project.last_error or "Timeline analysis did not complete."
+            project.append_log("Timeline analysis ended without completion.", level="error")
+            save_project(project)
 
 
 @router.get("/{project_id}/clip-candidates", response_model=ClipCandidatesDocument)
 def get_project_clip_candidates(project_id: str) -> ClipCandidatesDocument:
     validate_project_id(project_id)
+    invalidate_stale_clip_candidates(project_id)
     try:
         return load_project_clip_candidates(project_id)
     except ClipCandidatesNotFoundError as exc:
@@ -808,6 +1311,7 @@ def select_clips(
     request: SelectClipsRequest | None = None,
 ) -> SelectClipsResponse:
     validate_project_id(project_id)
+    invalidate_stale_clip_candidates(project_id)
     project = load_project(project_id)
     options = request or SelectClipsRequest()
 
@@ -819,6 +1323,9 @@ def select_clips(
     project.last_error = None
     project.append_log("Clip selection started.")
     save_project(project)
+
+    endpoint_started = time.perf_counter()
+    log_stage_event("api_select_clips", "start", project_id=project_id)
 
     try:
         document = select_project_clips(
@@ -840,6 +1347,14 @@ def select_clips(
             f"Clip selection completed with {document.candidate_count} proposed candidates."
         )
         save_project(project)
+
+        log_timing_summary(
+            project_id=project_id,
+            pipeline="api_select_clips",
+            total_seconds=time.perf_counter() - endpoint_started,
+            status="completed",
+            candidate_count=document.candidate_count,
+        )
 
         return SelectClipsResponse(
             project_id=project_id,
@@ -891,3 +1406,11 @@ def select_clips(
         project.append_log(f"Clip selection failed: {exc.message}", level="error")
         save_project(project)
         raise HTTPException(status_code=422, detail=exc.message) from exc
+    finally:
+        project = load_project(project_id)
+        if project.clip_selection_status == ProcessingStatus.PROCESSING:
+            project.clip_selection_status = ProcessingStatus.FAILED
+            project.clip_selection_completed_at = utc_now_iso()
+            project.last_error = project.last_error or "Clip selection did not complete."
+            project.append_log("Clip selection ended without completion.", level="error")
+            save_project(project)

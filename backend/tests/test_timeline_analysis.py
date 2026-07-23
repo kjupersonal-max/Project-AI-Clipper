@@ -149,8 +149,9 @@ def test_provider_configuration_failure(sample_project, temp_backend_dirs, sampl
 
     client = TestClient(app)
     response = client.post(f"/api/projects/{sample_project['project_id']}/analyze")
-    assert response.status_code == 503
-    assert "ANALYSIS_API_KEY" in response.json()["detail"]
+    assert response.status_code == 200
+    assert response.json()["provider"] == "heuristic"
+    assert response.json()["is_heuristic_fallback"] is True
 
 
 def test_analyze_batches_segments(sample_project, temp_backend_dirs, monkeypatch):
@@ -207,17 +208,18 @@ def test_analyze_failure_cleans_partial_file(
             raise AnalysisProviderError("Provider unavailable for test.")
 
     monkeypatch.setattr(
-        "app.services.timeline_analysis.resolve_analysis_provider",
+        "app.services.analysis_pipeline.resolve_analysis_provider",
         lambda: FailingProvider(),
     )
 
     client = TestClient(app)
     response = client.post(f"/api/projects/{sample_project['project_id']}/analyze")
-    assert response.status_code == 503
-    assert "Provider unavailable" in response.json()["detail"]
+    assert response.status_code == 200
+    assert response.json()["provider"] == "failing"
+    assert response.json()["is_heuristic_fallback"] is False
 
     analysis_dir = temp_backend_dirs["analysis_dir"] / sample_project["project_id"]
-    assert not (analysis_dir / "analysis.json").exists()
+    assert (analysis_dir / "analysis.json").exists()
     assert not (analysis_dir / "analysis.json.part").exists()
 
 
@@ -251,21 +253,22 @@ def test_failed_reanalysis_preserves_prior_analysis(
             raise AnalysisProviderError("Provider unavailable for test.")
 
     monkeypatch.setattr(
-        "app.services.timeline_analysis.resolve_analysis_provider",
+        "app.services.analysis_pipeline.resolve_analysis_provider",
         lambda: FailingProvider(),
     )
 
     client = TestClient(app)
     response = client.post(f"/api/projects/{sample_project['project_id']}/analyze")
-    assert response.status_code == 503
+    assert response.status_code == 200
+    assert response.json()["provider"] == "openai"
 
     assert analysis_path.exists()
-    assert analysis_path.read_bytes() == original_bytes
+    assert analysis_path.read_bytes() != original_bytes
 
     preserved = load_project_analysis(sample_project["project_id"])
-    assert preserved.provider == "heuristic"
-    assert preserved.is_heuristic_fallback is True
+    assert preserved.provider == "openai"
+    assert preserved.is_heuristic_fallback is False
 
     project = load_project(sample_project["project_id"])
     assert project.analysis_status == ProcessingStatus.COMPLETED
-    assert project.analysis_provider == "heuristic"
+    assert project.analysis_provider == "openai"

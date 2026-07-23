@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CaptionPresetPanel } from "@/components/projects/CaptionPresetPanel";
 import { CaptionPreviewOverlay } from "@/components/projects/CaptionPreviewOverlay";
 import { CaptionStylePanel, cloneCaptionStyle } from "@/components/projects/CaptionStylePanel";
+import { TranscriptionRecoveryPanel } from "@/components/projects/TranscriptionRecoveryPanel";
 import type { ClipCaptionsResponse, ExportClipResponse } from "@/lib/api/projects";
 import { getProjectClipMediaUrl, resolveMediaUrl } from "@/lib/api/projects";
 import { createDefaultCaptionStyle, type CaptionStyle } from "@/lib/caption-style";
@@ -50,6 +51,11 @@ type CaptionEditorProps = {
   onRender: () => Promise<void>;
   onReset: () => Promise<void>;
   onClose: () => void;
+  onCaptionsRefresh?: (captions: ClipCaptionsResponse) => void;
+  previewSourceUrl?: string | null;
+  previewSourceStart?: number;
+  canRenderExport?: boolean;
+  renderBlockedReason?: string | null;
 };
 
 function stylesEqual(left: CaptionStyle, right: CaptionStyle): boolean {
@@ -75,6 +81,11 @@ export function CaptionEditor({
   onRender,
   onReset,
   onClose,
+  onCaptionsRefresh,
+  previewSourceUrl = null,
+  previewSourceStart = 0,
+  canRenderExport = true,
+  renderBlockedReason = null,
 }: CaptionEditorProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const renderInFlightRef = useRef(false);
@@ -97,10 +108,14 @@ export function CaptionEditor({
   const [showSafeAreaGuides, setShowSafeAreaGuides] = useState(
     () => (captions?.style ?? createDefaultCaptionStyle()).safe_area_mode !== "none",
   );
-  const [editorTab, setEditorTab] = useState<"segments" | "style">("segments");
+  const [editorTab, setEditorTab] = useState<"segments" | "style" | "recovery">("segments");
 
   const clipTitle = getClipDisplayName(clip);
-  const mediaUrl = resolveMediaUrl(getProjectClipMediaUrl(clip.project_id, clip.clip_id));
+  const usesSourcePreview = Boolean(previewSourceUrl);
+  const sourceStart = previewSourceStart ?? clip.start_time;
+  const mediaUrl = usesSourcePreview
+    ? resolveMediaUrl(previewSourceUrl as string)
+    : resolveMediaUrl(getProjectClipMediaUrl(clip.project_id, clip.clip_id));
   const isBusy =
     loading || generating || saving || rendering || styleSaving || styleResetting || resetting;
 
@@ -115,6 +130,7 @@ export function CaptionEditor({
   );
 
   const canRender =
+    canRenderExport &&
     Boolean(captions) &&
     segments.length > 0 &&
     !segmentsDirty &&
@@ -160,12 +176,12 @@ export function CaptionEditor({
       const video = videoRef.current;
       const clamped = Math.max(0, Math.min(time, clip.duration));
       if (video) {
-        video.currentTime = clamped;
+        video.currentTime = usesSourcePreview ? sourceStart + clamped : clamped;
       }
       currentTimeRef.current = clamped;
       setPlaybackTime(clamped);
     },
-    [clip.duration],
+    [clip.duration, sourceStart, usesSourcePreview],
   );
 
   const updateSegment = useCallback(
@@ -236,16 +252,27 @@ export function CaptionEditor({
     const element: HTMLVideoElement = videoElement;
 
     function handleTimeUpdate() {
-      currentTimeRef.current = element.currentTime;
+      const relativeTime = usesSourcePreview
+        ? Math.max(0, Math.min(element.currentTime - sourceStart, clip.duration))
+        : element.currentTime;
+      currentTimeRef.current = relativeTime;
       setPlaybackTime((previous) => {
-        const next = element.currentTime;
-        const active = findActiveCaption(segments, next);
+        const active = findActiveCaption(segments, relativeTime);
         const previousActive = findActiveCaption(segments, previous);
-        if (active?.id !== previousActive?.id || Math.abs(next - previous) >= 0.1) {
-          return next;
+        if (active?.id !== previousActive?.id || Math.abs(relativeTime - previous) >= 0.1) {
+          return relativeTime;
         }
         return previous;
       });
+
+      if (
+        usesSourcePreview &&
+        !element.paused &&
+        element.currentTime >= sourceStart + clip.duration - 0.05
+      ) {
+        element.pause();
+        element.currentTime = sourceStart + clip.duration;
+      }
     }
 
     function handlePlay() {
@@ -266,7 +293,25 @@ export function CaptionEditor({
       element.removeEventListener("play", handlePlay);
       element.removeEventListener("pause", handlePause);
     };
-  }, [segments]);
+  }, [clip.duration, segments, sourceStart, usesSourcePreview]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !usesSourcePreview) {
+      return;
+    }
+
+    function handleLoadedMetadata() {
+      if (!video) {
+        return;
+      }
+      video.currentTime = sourceStart;
+      setPlaybackTime(0);
+    }
+
+    video.addEventListener("loadedmetadata", handleLoadedMetadata);
+    return () => video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+  }, [sourceStart, usesSourcePreview]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -323,6 +368,7 @@ export function CaptionEditor({
                   segments={segments}
                   style={captionStyle}
                   showSafeAreaGuides={showSafeAreaGuides}
+                  playbackTimeOffset={usesSourcePreview ? sourceStart : 0}
                 />
               ) : null}
             </div>
@@ -370,9 +416,42 @@ export function CaptionEditor({
               >
                 Style
               </button>
+              <button
+                type="button"
+                onClick={() => setEditorTab("recovery")}
+                disabled={!captions || segments.length === 0}
+                className={cn(
+                  "rounded-lg px-3 py-1.5 text-xs font-medium disabled:opacity-50",
+                  editorTab === "recovery"
+                    ? "bg-zinc-800 text-zinc-100"
+                    : "text-zinc-500 hover:text-zinc-300",
+                )}
+              >
+                Recovery
+              </button>
             </div>
 
-            {editorTab === "style" ? (
+            {editorTab === "recovery" && captions ? (
+              <TranscriptionRecoveryPanel
+                projectId={clip.project_id}
+                clipId={clip.clip_id}
+                clipDuration={clip.duration}
+                captions={captions}
+                selectedSegmentId={selectedId}
+                playbackTime={playbackTime}
+                disabled={isBusy}
+                onCaptionsUpdated={(updated) => {
+                  onCaptionsRefresh?.(updated);
+                  setSegments(cloneCaptionSegments(sortCaptionSegments(updated.segments)));
+                  setSegmentsDirty(false);
+                }}
+                onSegmentsUpdated={(nextSegments) => {
+                  setSegments(nextSegments);
+                  setSegmentsDirty(true);
+                }}
+                onError={setLocalError}
+              />
+            ) : editorTab === "style" ? (
               <div className="flex flex-col gap-4">
                 <CaptionPresetPanel
                   currentStyle={captionStyle}
@@ -472,7 +551,12 @@ export function CaptionEditor({
                           )}
                         >
                           <div className="mb-2 flex items-center justify-between text-xs text-zinc-500">
-                            <span>Caption {segment.sequence + 1}</span>
+                            <span>
+                              Caption {segment.sequence + 1}
+                              {segment.manually_edited ? " · edited" : ""}
+                              {segment.low_confidence ? " · low confidence" : ""}
+                              {segment.overlapping_speech ? " · overlap" : ""}
+                            </span>
                             <span>
                               {formatCaptionTimestamp(segment.start)} –{" "}
                               {formatCaptionTimestamp(segment.end)}
@@ -552,6 +636,12 @@ export function CaptionEditor({
           {renderSuccess ? (
             <div className="mb-3 rounded-lg border border-violet-500/20 bg-violet-500/5 px-3 py-2 text-sm text-violet-100">
               {renderSuccess}
+            </div>
+          ) : null}
+
+          {renderBlockedReason && !canRenderExport ? (
+            <div className="mb-3 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-sm text-zinc-400">
+              {renderBlockedReason}
             </div>
           ) : null}
 

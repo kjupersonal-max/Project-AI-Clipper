@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
@@ -10,6 +12,7 @@ from app.services.storage import (
 )
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
+logger = logging.getLogger(__name__)
 
 
 class UploadResponse(BaseModel):
@@ -22,6 +25,7 @@ class UploadResponse(BaseModel):
 
 @router.post("", response_model=UploadResponse, status_code=201)
 async def upload_video(file: UploadFile = File(...)) -> UploadResponse:
+    logger.info("upload_video entered filename=%s", file.filename or "<missing>")
     if not file.filename:
         raise HTTPException(status_code=400, detail="A filename is required.")
 

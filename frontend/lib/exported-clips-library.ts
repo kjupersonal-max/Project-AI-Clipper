@@ -1,5 +1,7 @@
 import type { ExportClipResponse } from "@/lib/api/projects";
 
+export const LEGACY_EXPORT_MIN_DURATION_SECONDS = 15;
+
 export type ExportedClipSort =
   | "newest"
   | "oldest"
@@ -21,6 +23,28 @@ export function isCaptionedExport(clip: ExportClipResponse): boolean {
 
 export function canEditClipCaptions(clip: ExportClipResponse): boolean {
   return !isCaptionedExport(clip);
+}
+
+export function isLegacyShortExport(clip: ExportClipResponse): boolean {
+  return clip.duration + 0.01 < LEGACY_EXPORT_MIN_DURATION_SECONDS;
+}
+
+export function partitionExportedClips(clips: ExportClipResponse[]): {
+  currentExports: ExportClipResponse[];
+  legacyExports: ExportClipResponse[];
+} {
+  const currentExports: ExportClipResponse[] = [];
+  const legacyExports: ExportClipResponse[] = [];
+
+  for (const clip of clips) {
+    if (isLegacyShortExport(clip)) {
+      legacyExports.push(clip);
+    } else {
+      currentExports.push(clip);
+    }
+  }
+
+  return { currentExports, legacyExports };
 }
 
 function compareCreatedAtDesc(left: ExportClipResponse, right: ExportClipResponse): number {
@@ -94,10 +118,7 @@ export function sortExportedClips(
       break;
     case "newest":
     default:
-      sorted.sort(
-        (left, right) =>
-          compareCreatedAtDesc(left, right) || left.clip_id.localeCompare(right.clip_id),
-      );
+      sorted.sort(compareCreatedAtDesc);
       break;
   }
 

@@ -32,7 +32,6 @@ import {
   type ExportClipRequest,
   type ExportClipResponse,
   type Project,
-  type SegmentAnalysis,
   type TranscriptDocument,
 } from "@/lib/api/projects";
 import { Badge } from "@/components/ui/Badge";
@@ -67,9 +66,7 @@ import {
 } from "@/lib/clip-candidate-filters";
 import {
   buildExportClipRequest,
-  buildExportClipRequestFromSegment,
   buildExportKeyFromCandidate,
-  buildExportKeyFromSegment,
   buildExportedStateFromClips,
   clearCandidateExportedState,
   isCandidateExported,
@@ -80,6 +77,12 @@ import {
   updateExportedClip,
   type CandidateExportState,
 } from "@/lib/clip-export";
+import {
+  buildCaptionTargetFromCandidate,
+  createInitialCandidateCaptionState,
+  type CandidateCaptionState,
+} from "@/lib/candidate-captions";
+import { partitionExportedClips } from "@/lib/exported-clips-library";
 import {
   AlertCircle,
   AudioLines,
@@ -122,6 +125,7 @@ function formatFrameRate(value: number | null | undefined): string {
 
 export function ProjectDetails({ projectId }: ProjectDetailsProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const clipCandidatesSectionRef = useRef<HTMLDivElement>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -151,6 +155,13 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
   const [trimSaving, setTrimSaving] = useState(false);
   const [trimError, setTrimError] = useState<string | null>(null);
   const [captionClip, setCaptionClip] = useState<ExportClipResponse | null>(null);
+  const [captionPreviewFromSource, setCaptionPreviewFromSource] = useState<{
+    videoUrl: string;
+    startTime: number;
+  } | null>(null);
+  const [candidateCaptionStates, setCandidateCaptionStates] = useState<
+    Record<string, CandidateCaptionState>
+  >({});
   const [clipCaptions, setClipCaptions] = useState<ClipCaptionsResponse | null>(null);
   const [captionsLoading, setCaptionsLoading] = useState(false);
   const [captionsGenerating, setCaptionsGenerating] = useState(false);
@@ -244,6 +255,35 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
     try {
       const data = await fetchProjectClipCandidates(projectId);
       setClipCandidates(data);
+
+      const captionStates: Record<string, CandidateCaptionState> = {};
+      await Promise.all(
+        data.candidates.map(async (candidate) => {
+          try {
+            await fetchProjectClipCaptions(projectId, candidate.clip_id);
+            captionStates[candidate.clip_id] = { status: "completed" };
+          } catch (error) {
+            const status =
+              error && typeof error === "object" && "status" in error
+                ? Number((error as ApiError).status)
+                : undefined;
+            if (status === 404) {
+              captionStates[candidate.clip_id] = createInitialCandidateCaptionState();
+            }
+          }
+        }),
+      );
+
+      setCandidateCaptionStates((current) => {
+        const merged = { ...captionStates };
+        for (const [candidateId, state] of Object.entries(current)) {
+          if (state.status === "generating") {
+            merged[candidateId] = state;
+          }
+        }
+        return merged;
+      });
+
       return data;
     } catch (error) {
       const status =
@@ -412,16 +452,6 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
     [exportStates, exportedCandidateIds, projectId],
   );
 
-  const handleExportSegment = useCallback(
-    (segment: SegmentAnalysis) => {
-      void handleExport(
-        buildExportKeyFromSegment(segment),
-        buildExportClipRequestFromSegment(segment),
-      );
-    },
-    [handleExport],
-  );
-
   const handleExportClip = useCallback(
     (candidate: ClipCandidate) => {
       void handleExport(
@@ -516,10 +546,58 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
   const handleOpenCaptionsEditor = useCallback(
     (clip: ExportClipResponse) => {
       setCaptionClip(clip);
+      setCaptionPreviewFromSource(null);
       setCaptionsError(null);
       void loadClipCaptions(clip.clip_id);
     },
     [loadClipCaptions],
+  );
+
+  const handleOpenCandidateCaptionsEditor = useCallback(
+    (candidate: ClipCandidate) => {
+      setCaptionClip(buildCaptionTargetFromCandidate(candidate, projectId));
+      setCaptionPreviewFromSource({
+        videoUrl: getProjectVideoUrl(projectId),
+        startTime: candidate.start,
+      });
+      setCaptionsError(null);
+      void loadClipCaptions(candidate.clip_id);
+    },
+    [loadClipCaptions, projectId],
+  );
+
+  const handleGenerateCandidateCaptions = useCallback(
+    async (candidate: ClipCandidate) => {
+      setCandidateCaptionStates((current) => ({
+        ...current,
+        [candidate.clip_id]: { status: "generating" },
+      }));
+      setCaptionsError(null);
+
+      try {
+        const captions = await generateProjectClipCaptions(projectId, candidate.clip_id);
+        setCandidateCaptionStates((current) => ({
+          ...current,
+          [candidate.clip_id]: { status: "completed" },
+        }));
+        setCaptionClip(buildCaptionTargetFromCandidate(candidate, projectId));
+        setCaptionPreviewFromSource({
+          videoUrl: getProjectVideoUrl(projectId),
+          startTime: candidate.start,
+        });
+        setClipCaptions(captions);
+      } catch (error) {
+        const message =
+          error && typeof error === "object" && "message" in error
+            ? String((error as ApiError).message)
+            : "Unable to generate captions.";
+        setCandidateCaptionStates((current) => ({
+          ...current,
+          [candidate.clip_id]: { status: "failed", error: message },
+        }));
+      }
+    },
+    [projectId],
   );
 
   const handleCloseCaptionsEditor = useCallback(() => {
@@ -534,6 +612,7 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
       return;
     }
     setCaptionClip(null);
+    setCaptionPreviewFromSource(null);
     setClipCaptions(null);
     setCaptionsError(null);
     setCaptionRenderSuccess(null);
@@ -557,6 +636,12 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
     try {
       const captions = await generateProjectClipCaptions(projectId, captionClip.clip_id);
       setClipCaptions(captions);
+      if (captionClip.candidate_id) {
+        setCandidateCaptionStates((current) => ({
+          ...current,
+          [captionClip.candidate_id as string]: { status: "completed" },
+        }));
+      }
     } catch (error) {
       const message =
         error && typeof error === "object" && "message" in error
@@ -655,13 +740,24 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
       return;
     }
 
+    const exportedClip = exportedClips.find(
+      (clip) =>
+        clip.clip_id === captionClip.clip_id ||
+        (captionClip.candidate_id != null && clip.candidate_id === captionClip.candidate_id),
+    );
+
+    if (!exportedClip || exportedClip.export_kind === "captioned") {
+      setCaptionsError("Export this clip first, then render a captioned MP4.");
+      return;
+    }
+
     captionsRenderInFlightRef.current = true;
     setCaptionsRendering(true);
     setCaptionsError(null);
     setCaptionRenderSuccess(null);
 
     try {
-      const rendered = await renderProjectClipCaptions(projectId, captionClip.clip_id);
+      const rendered = await renderProjectClipCaptions(projectId, exportedClip.clip_id);
       setExportedClips((current) => mergeExportedClips([rendered], current));
       setCaptionRenderSuccess(
         `Captioned export ready: ${rendered.clip_name ?? rendered.filename}. Find it in Exported Clips.`,
@@ -677,7 +773,7 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
       captionsRenderInFlightRef.current = false;
       setCaptionsRendering(false);
     }
-  }, [captionClip, projectId]);
+  }, [captionClip, exportedClips, projectId]);
 
   const handleResetCaptions = useCallback(async () => {
     if (!captionClip) {
@@ -893,6 +989,12 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
       await selectProjectClips(projectId);
       setSelectClipsState("success");
       await refreshProject();
+      window.requestAnimationFrame(() => {
+        clipCandidatesSectionRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      });
     } catch (error) {
       const message =
         error && typeof error === "object" && "message" in error
@@ -1057,7 +1159,7 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
             <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
             <p className="text-sm text-emerald-300">
               {selectClipsState === "success"
-                ? "Clip selection completed. Proposed candidates loaded below."
+                ? "Clip selection completed. Final clip candidates are ready below."
                 : analyzeState === "success"
                   ? "Timeline analysis completed. Results loaded below."
                   : transcribeState === "success"
@@ -1312,13 +1414,56 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
         </CardContent>
       </Card>
 
+      <div ref={clipCandidatesSectionRef}>
+      <Card>
+        <CardHeader
+          title="Clip Candidates"
+          description={
+            project.clip_selection_status === "completed"
+              ? `${clipCandidates?.candidate_count ?? project.clip_candidate_count ?? 0} final clip candidates ready for captions and export`
+              : "Run Select Clips after analysis to generate final ranked clip candidates"
+          }
+        />
+        <CardContent>
+          {clipCandidates ? (
+            <ClipCandidatesPanel
+              clipCandidates={clipCandidates}
+              filters={clipCandidateFilters}
+              onFiltersChange={setClipCandidateFilters}
+              onSeek={seekVideoTo}
+              exportStates={exportStates}
+              exportedCandidateIds={exportedCandidateIds}
+              captionStates={candidateCaptionStates}
+              onExport={handleExportClip}
+              onGenerateCaptions={handleGenerateCandidateCaptions}
+              onEditCaptions={handleOpenCandidateCaptionsEditor}
+            />
+          ) : (
+            <ClipCandidatesState
+              loading={clipCandidatesLoading || selectClipsState === "loading"}
+              error={clipCandidatesError}
+            />
+          )}
+          {!clipCandidates &&
+          !clipCandidatesLoading &&
+          selectClipsState !== "loading" &&
+          !clipCandidatesError &&
+          project.clip_selection_status !== "completed" ? (
+            <p className="text-sm text-zinc-500">
+              No final clip candidates yet. Complete Analyze, then click Select Clips.
+            </p>
+          ) : null}
+        </CardContent>
+      </Card>
+      </div>
+
       <Card>
         <CardHeader
           title="Timeline Analysis"
           description={
             project.analysis_status === "completed"
-              ? "Segment scoring and clip candidates — export directly from highlighted segments"
-              : "Analyze the completed transcript to score clip candidates"
+              ? "Internal transcript segment scoring for inspection — not exportable clip outputs"
+              : "Analyze the completed transcript to score internal clip signals"
           }
         />
         <CardContent>
@@ -1327,9 +1472,6 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
               analysis={analysis}
               filters={analysisFilters}
               onSeek={seekVideoTo}
-              exportStates={exportStates}
-              exportedCandidateIds={exportedCandidateIds}
-              onExportSegment={handleExportSegment}
             />
           ) : (
             <TimelineAnalysisState
@@ -1358,48 +1500,13 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
 
       <Card>
         <CardHeader
-          title="Clip Candidates"
-          description={
-            project.clip_selection_status === "completed"
-              ? "Ranked proposed clip ranges from Select Clips — not rendered video files"
-              : "Optional ranked clip selection after analysis. You can export directly from Timeline Analysis above."
-          }
-        />
-        <CardContent>
-          {clipCandidates ? (
-            <ClipCandidatesPanel
-              clipCandidates={clipCandidates}
-              filters={clipCandidateFilters}
-              onFiltersChange={setClipCandidateFilters}
-              onSeek={seekVideoTo}
-              exportStates={exportStates}
-              exportedCandidateIds={exportedCandidateIds}
-              onExport={handleExportClip}
-            />
-          ) : (
-            <ClipCandidatesState
-              loading={clipCandidatesLoading || selectClipsState === "loading"}
-              error={clipCandidatesError}
-            />
-          )}
-          {!clipCandidates &&
-          !clipCandidatesLoading &&
-          selectClipsState !== "loading" &&
-          !clipCandidatesError &&
-          project.clip_selection_status !== "completed" ? (
-            <p className="text-sm text-zinc-500">
-              No ranked clip candidates yet. Export directly from Timeline Analysis above, or click
-              Select Clips to generate ranked ranges.
-            </p>
-          ) : null}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader
           title="Exported Clips"
-          description="Saved MP4 files exported from clip candidates"
-          action={<ExportedClipsSummary count={exportedClips.length} />}
+          description="Rendered MP4 files exported from final clip candidates"
+          action={
+            <ExportedClipsSummary
+              count={partitionExportedClips(exportedClips).currentExports.length}
+            />
+          }
         />
         <CardContent>
           <ExportedClipsPanel
@@ -1429,6 +1536,17 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
           resetting={captionsResetting}
           error={captionsError}
           renderSuccess={captionRenderSuccess}
+          previewSourceUrl={captionPreviewFromSource?.videoUrl ?? null}
+          previewSourceStart={captionPreviewFromSource?.startTime ?? captionClip.start_time}
+          canRenderExport={Boolean(
+            exportedClips.find(
+              (clip) =>
+                clip.clip_id === captionClip.clip_id ||
+                (captionClip.candidate_id != null &&
+                  clip.candidate_id === captionClip.candidate_id),
+            ),
+          )}
+          renderBlockedReason="Export this clip first to render a captioned MP4."
           onGenerate={handleGenerateCaptions}
           onSave={handleSaveCaptions}
           onSaveStyle={handleSaveCaptionStyle}
@@ -1436,6 +1554,7 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
           onRender={handleRenderCaptions}
           onReset={handleResetCaptions}
           onClose={handleCloseCaptionsEditor}
+          onCaptionsRefresh={(updated) => setClipCaptions(updated)}
         />
       ) : null}
 

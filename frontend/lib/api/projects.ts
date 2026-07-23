@@ -109,6 +109,52 @@ export type TranscribeResponse = {
   segment_count: number;
   word_count: number;
   transcript_path: string;
+  quality_mode?: TranscriptionQualityMode | null;
+  quality_rating?: TranscriptionQualityRating | null;
+  warnings?: string[];
+};
+
+export type TranscriptionQualityMode = "fast" | "balanced" | "high_accuracy";
+export type TranscriptionQualityRating = "good" | "review_recommended" | "poor";
+
+export type TranscribeRequest = {
+  quality_mode?: TranscriptionQualityMode;
+  vocabulary_hints?: string | null;
+  preserve_manual_edits?: boolean;
+};
+
+export type RetranscribeRangeRequest = {
+  start_time: number;
+  end_time: number;
+  quality_mode?: TranscriptionQualityMode;
+  vocabulary_hints?: string | null;
+};
+
+export type RetranscribeRangePreviewResponse = {
+  project_id: string;
+  clip_id: string;
+  start_time: number;
+  end_time: number;
+  preview_segments: CaptionSegment[];
+  quality_rating: TranscriptionQualityRating | null;
+  warnings: string[];
+  manual_edit_warnings: string[];
+};
+
+export type ApplyRetranscribeRangeRequest = {
+  start_time: number;
+  end_time: number;
+  preview_segments: UpdateCaptionSegmentRequest[];
+  mode?: "replace" | "insert" | "cancel";
+};
+
+export type TranscriptionQualityResponse = {
+  project_id: string;
+  clip_id: string | null;
+  quality_mode: TranscriptionQualityMode | null;
+  quality_rating: TranscriptionQualityRating | null;
+  warnings: string[];
+  manual_edit_count: number;
 };
 
 export type SegmentAnalysis = {
@@ -272,6 +318,11 @@ export type CaptionSegment = {
   sequence: number;
   created_at: string;
   updated_at: string;
+  manually_edited?: boolean;
+  original_transcription_text?: string | null;
+  transcription_revision?: number | null;
+  low_confidence?: boolean;
+  overlapping_speech?: boolean;
 };
 
 export type ClipCaptionsResponse = {
@@ -285,6 +336,10 @@ export type ClipCaptionsResponse = {
   style: CaptionStyle;
   created_at: string;
   updated_at: string;
+  transcription_quality_mode?: TranscriptionQualityMode | null;
+  transcription_quality_rating?: TranscriptionQualityRating | null;
+  transcription_warnings?: string[];
+  vocabulary_hints?: string | null;
 };
 
 export type UpdateCaptionSegmentRequest = {
@@ -723,4 +778,204 @@ export async function renderProjectClipCaptions(
   }
 
   return response.json() as Promise<ExportClipResponse>;
+}
+
+export async function transcribeProjectWithOptions(
+  projectId: string,
+  request: TranscribeRequest = {},
+): Promise<TranscribeResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/transcribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+  return response.json() as Promise<TranscribeResponse>;
+}
+
+export async function fetchClipTranscriptionQuality(
+  projectId: string,
+  clipId: string,
+): Promise<TranscriptionQualityResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/captions/transcription-quality`,
+    { cache: "no-store" },
+  );
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+  return response.json() as Promise<TranscriptionQualityResponse>;
+}
+
+export async function updateClipVocabularyHints(
+  projectId: string,
+  clipId: string,
+  vocabularyHints: string | null,
+): Promise<ClipCaptionsResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/captions/vocabulary-hints`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ vocabulary_hints: vocabularyHints }),
+    },
+  );
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+  return response.json() as Promise<ClipCaptionsResponse>;
+}
+
+export async function previewRetranscribeRange(
+  projectId: string,
+  clipId: string,
+  request: RetranscribeRangeRequest,
+): Promise<RetranscribeRangePreviewResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/captions/retranscribe/preview`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    },
+  );
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+  return response.json() as Promise<RetranscribeRangePreviewResponse>;
+}
+
+export async function applyRetranscribeRange(
+  projectId: string,
+  clipId: string,
+  request: ApplyRetranscribeRangeRequest,
+): Promise<ClipCaptionsResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/captions/retranscribe/apply`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    },
+  );
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+  return response.json() as Promise<ClipCaptionsResponse>;
+}
+
+export async function insertCaptionWordApi(
+  projectId: string,
+  clipId: string,
+  payload: { segment_id: string; word: string; start: number; end: number },
+): Promise<ClipCaptionsResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/captions/words`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+  return response.json() as Promise<ClipCaptionsResponse>;
+}
+
+export async function insertCaptionSegmentApi(
+  projectId: string,
+  clipId: string,
+  payload: { text: string; start: number; end: number },
+): Promise<ClipCaptionsResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/captions/segments`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+  return response.json() as Promise<ClipCaptionsResponse>;
+}
+
+export async function splitCaptionSegmentApi(
+  projectId: string,
+  clipId: string,
+  payload: { segment_id: string; split_time: number },
+): Promise<ClipCaptionsResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/captions/segments/split`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+  return response.json() as Promise<ClipCaptionsResponse>;
+}
+
+export async function mergeCaptionSegmentsApi(
+  projectId: string,
+  clipId: string,
+  payload: { first_segment_id: string; second_segment_id: string },
+): Promise<ClipCaptionsResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/captions/segments/merge`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+  return response.json() as Promise<ClipCaptionsResponse>;
+}
+
+export async function nudgeCaptionTimingApi(
+  projectId: string,
+  clipId: string,
+  payload: { segment_id: string; delta_seconds: number },
+): Promise<ClipCaptionsResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/captions/segments/nudge`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+  return response.json() as Promise<ClipCaptionsResponse>;
+}
+
+export async function deleteCaptionWordApi(
+  projectId: string,
+  clipId: string,
+  payload: { segment_id: string; word_index: number },
+): Promise<ClipCaptionsResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/captions/words/delete`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+  return response.json() as Promise<ClipCaptionsResponse>;
 }

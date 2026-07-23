@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
+import math
 import shutil
+import time
 import uuid
 from dataclasses import dataclass
 
@@ -13,15 +16,18 @@ from app.models.project import (
     ClipCandidate,
     ClipCandidateStatus,
     ClipCandidatesDocument,
+    ProcessingStatus,
     SegmentAnalysis,
     TranscriptDocument,
     TranscriptSegment,
 )
+from app.services.pipeline_timing import log_stage_event, log_timing_summary
 from app.services.project_store import (
     get_clip_candidates_output_dir,
     get_clip_candidates_output_path,
     get_relative_clip_candidates_path,
     load_project,
+    save_project,
 )
 from app.services.timeline_analysis import (
     AnalysisNotFoundError,
@@ -33,6 +39,9 @@ from app.services.transcription import (
     TranscriptionProcessError,
     load_project_transcript,
 )
+from app.services.transcript_store import load_workflow_transcript
+
+logger = logging.getLogger(__name__)
 
 
 class ClipSelectionTranscriptRequiredError(Exception):
@@ -66,12 +75,30 @@ class ClipCandidatesNotFoundError(Exception):
 
 
 @dataclass(frozen=True)
+class ClipDurationClass:
+    label: str
+    min_seconds: float
+    max_seconds: float
+
+
+def _duration_classes() -> list[ClipDurationClass]:
+    return [
+        ClipDurationClass("short", settings.clip_selection_short_min_seconds, settings.clip_selection_short_max_seconds),
+        ClipDurationClass("medium", settings.clip_selection_medium_min_seconds, settings.clip_selection_medium_max_seconds),
+        ClipDurationClass("long", settings.clip_selection_long_min_seconds, settings.clip_selection_long_max_seconds),
+    ]
+
+
+@dataclass(frozen=True)
 class ClipSelectionOptions:
     min_duration_seconds: float
+    preferred_min_duration_seconds: float
+    preferred_max_duration_seconds: float
     max_duration_seconds: float
     max_gap_seconds: float
     max_candidates: int
     min_score: float
+    context_padding_seconds: float
 
 
 def _sanitize_error_message(message: str, max_length: int = 240) -> str:
@@ -112,10 +139,13 @@ def resolve_selection_options(
     min_score: float | None = None,
 ) -> ClipSelectionOptions:
     resolved_min = min_duration_seconds or settings.clip_selection_min_duration_seconds
+    resolved_preferred_min = settings.clip_selection_preferred_min_duration_seconds
+    resolved_preferred_max = settings.clip_selection_preferred_max_duration_seconds
     resolved_max = max_duration_seconds or settings.clip_selection_max_duration_seconds
     resolved_gap = max_gap_seconds or settings.clip_selection_max_gap_seconds
     resolved_max_candidates = max_candidates or settings.clip_selection_max_candidates
     resolved_min_score = min_score if min_score is not None else settings.clip_selection_min_score
+    resolved_context_padding = settings.clip_selection_context_padding_seconds
 
     if resolved_min <= 0:
         raise ClipSelectionProcessError("Minimum clip duration must be greater than zero.")
@@ -127,15 +157,22 @@ def resolve_selection_options(
         raise ClipSelectionProcessError("Maximum segment gap cannot be negative.")
     if resolved_max_candidates <= 0:
         raise ClipSelectionProcessError("Maximum candidate count must be greater than zero.")
+    resolved_max_candidates = min(
+        resolved_max_candidates,
+        settings.clip_selection_hard_max_candidates,
+    )
     if not 0.0 <= resolved_min_score <= 100.0:
         raise ClipSelectionProcessError("Minimum score must be between 0 and 100.")
 
     return ClipSelectionOptions(
         min_duration_seconds=resolved_min,
+        preferred_min_duration_seconds=resolved_preferred_min,
+        preferred_max_duration_seconds=resolved_preferred_max,
         max_duration_seconds=resolved_max,
         max_gap_seconds=resolved_gap,
         max_candidates=resolved_max_candidates,
         min_score=resolved_min_score,
+        context_padding_seconds=resolved_context_padding,
     )
 
 
@@ -151,7 +188,7 @@ def _require_completed_inputs(project_id: str) -> tuple[TranscriptDocument, Anal
         )
 
     try:
-        transcript = load_project_transcript(project_id)
+        transcript = load_workflow_transcript(project_id)
     except TranscriptNotFoundError as exc:
         raise ClipSelectionTranscriptRequiredError(exc.message) from exc
     except TranscriptionProcessError as exc:
@@ -259,56 +296,68 @@ def _expand_group_segments(
     group: list[SegmentAnalysis],
     all_segments: list[SegmentAnalysis],
     options: ClipSelectionOptions,
+    transcript_segments: dict[int, TranscriptSegment],
 ) -> list[SegmentAnalysis]:
     by_id = _ordered_segments_by_id(all_segments)
     min_id = min(segment.segment_id for segment in group)
     max_id = max(segment.segment_id for segment in group)
     selected_ids = {segment.segment_id for segment in group}
-    selected = [by_id[segment_id] for segment_id in sorted(selected_ids)]
+
+    def selected_segments() -> list[SegmentAnalysis]:
+        return [by_id[segment_id] for segment_id in sorted(selected_ids) if segment_id in by_id]
 
     def current_duration() -> float:
-        return selected[-1].end - selected[0].start
+        ordered = selected_segments()
+        if not ordered:
+            return 0.0
+        return ordered[-1].end - ordered[0].start
 
-    while current_duration() < options.min_duration_seconds:
-        expanded = False
+    target_duration = max(options.min_duration_seconds, options.preferred_min_duration_seconds)
+
+    while current_duration() < target_duration:
         previous_id = min_id - 1
         next_id = max_id + 1
-
         previous_segment = by_id.get(previous_id)
         next_segment = by_id.get(next_id)
         candidates: list[tuple[float, SegmentAnalysis, str]] = []
 
         if previous_segment is not None:
-            gap = selected[0].start - previous_segment.end
-            if gap <= options.max_gap_seconds:
-                projected = selected[-1].end - previous_segment.start
+            gap = selected_segments()[0].start - previous_segment.end
+            if gap <= options.max_gap_seconds + options.context_padding_seconds:
+                projected = selected_segments()[-1].end - previous_segment.start
                 if projected <= options.max_duration_seconds:
-                    candidates.append((_segment_strength(previous_segment), previous_segment, "prev"))
+                    bonus = 1.5 if "?" in previous_segment.text else 0.0
+                    candidates.append(
+                        (_segment_strength(previous_segment) + bonus, previous_segment, "prev")
+                    )
 
         if next_segment is not None:
-            gap = next_segment.start - selected[-1].end
-            if gap <= options.max_gap_seconds:
-                projected = next_segment.end - selected[0].start
+            gap = next_segment.start - selected_segments()[-1].end
+            if gap <= options.max_gap_seconds + options.context_padding_seconds:
+                projected = next_segment.end - selected_segments()[0].start
                 if projected <= options.max_duration_seconds:
-                    candidates.append((_segment_strength(next_segment), next_segment, "next"))
+                    bonus = 2.0 if any(
+                        "?" in segment.text for segment in selected_segments()
+                    ) else 0.0
+                    candidates.append(
+                        (_segment_strength(next_segment) + bonus, next_segment, "next")
+                    )
 
         if not candidates:
             break
 
         _, chosen, direction = max(candidates, key=lambda item: item[0])
+        selected_ids.add(chosen.segment_id)
         if direction == "prev":
-            selected.insert(0, chosen)
             min_id = chosen.segment_id
         else:
-            selected.append(chosen)
             max_id = chosen.segment_id
-        selected_ids.add(chosen.segment_id)
-        expanded = True
 
-        if not expanded:
-            break
-
-    return selected
+    return _normalize_candidate_segments(
+        selected_segments(),
+        known_segment_ids=set(by_id),
+        source_duration=float("inf"),
+    )
 
 
 def _trim_group_to_max_duration(
@@ -379,7 +428,9 @@ def _compute_candidate_score(
     payoff_score: float,
     standalone_score: float,
     context_dependency_score: float,
-) -> float:
+    duration: float,
+    options: ClipSelectionOptions,
+) -> tuple[float, dict[str, float]]:
     peak_engagement = max(
         max(segment.excitement_score for segment in segments),
         max(segment.humor_score for segment in segments),
@@ -397,16 +448,49 @@ def _compute_candidate_score(
         for segment in segments
     ) / len(segments)
 
+    completeness_bonus = min(10.0, standalone_score * 0.8 + payoff_score * 0.4)
+    educational_avg = _average_score(segments, "educational_score")
+    retention_score = _round_score(payoff_score * 0.6 + (10.0 - context_dependency_score) * 0.4)
+    engagement_score = _round_score((peak_engagement + average_engagement) / 2.0)
+    monetization_potential = _round_score(
+        standalone_score * 0.35
+        + educational_avg * 0.25
+        + hook_score * 0.2
+        + (10.0 - context_dependency_score) * 0.2
+    )
+    duration_quality = 0.0
+    if options.preferred_min_duration_seconds <= duration <= options.preferred_max_duration_seconds:
+        duration_quality = 8.0
+    elif duration < options.min_duration_seconds:
+        duration_quality = -100.0
+    elif duration < options.preferred_min_duration_seconds:
+        duration_quality = max(-12.0, (duration - options.preferred_min_duration_seconds) * 0.8)
+    elif duration > options.preferred_max_duration_seconds:
+        duration_quality = max(-8.0, (options.preferred_max_duration_seconds - duration) * 0.25)
+
     score = (
         hook_score * 4.5
         + payoff_score * 3.5
         + standalone_score * 4.0
         + peak_engagement * 2.5
         + average_engagement * 2.0
+        + completeness_bonus
+        + duration_quality
         - context_dependency_score * 3.0
     )
-    normalized = (score / 70.0) * 100.0
-    return round(_clamp(normalized, 0.0, 100.0), 1)
+    normalized = (score / 78.0) * 100.0
+    breakdown = {
+        "hook": round(hook_score * 4.5, 2),
+        "payoff": round(payoff_score * 3.5, 2),
+        "standalone": round(standalone_score * 4.0, 2),
+        "engagement": round((peak_engagement * 2.5 + average_engagement * 2.0), 2),
+        "retention": round(retention_score * 2.0, 2),
+        "completeness": round(completeness_bonus, 2),
+        "monetization_potential": round(monetization_potential * 1.5, 2),
+        "duration_quality": round(duration_quality, 2),
+        "context_penalty": round(context_dependency_score * 3.0, 2),
+    }
+    return round(_clamp(normalized, 0.0, 100.0), 1), breakdown
 
 
 def _compute_confidence(
@@ -502,40 +586,95 @@ def _build_transcript_text(
     return " ".join(parts)
 
 
+def _normalize_candidate_segments(
+    segments: list[SegmentAnalysis],
+    *,
+    source_duration: float,
+    known_segment_ids: set[int],
+) -> list[SegmentAnalysis]:
+    if not segments:
+        return []
+
+    valid: list[SegmentAnalysis] = []
+    for segment in segments:
+        if segment.segment_id not in known_segment_ids:
+            logger.warning("Dropping unknown segment id=%s from candidate", segment.segment_id)
+            continue
+        if not math.isfinite(segment.start) or not math.isfinite(segment.end):
+            logger.warning("Dropping invalid timing for segment id=%s", segment.segment_id)
+            continue
+        if segment.start < 0 or segment.end <= segment.start:
+            logger.warning("Dropping non-positive segment id=%s", segment.segment_id)
+            continue
+        if source_duration > 0 and segment.start >= source_duration:
+            continue
+        clamped_end = min(segment.end, source_duration) if source_duration > 0 else segment.end
+        if clamped_end <= segment.start:
+            continue
+        if clamped_end != segment.end:
+            segment = segment.model_copy(update={"end": round(clamped_end, 3)})
+        valid.append(segment)
+
+    if not valid:
+        return []
+
+    ordered = sorted(valid, key=lambda item: (item.start, item.segment_id))
+    normalized: list[SegmentAnalysis] = [ordered[0]]
+    for segment in ordered[1:]:
+        previous = normalized[-1]
+        if segment.start < previous.end - 0.05:
+            if _segment_strength(segment) > _segment_strength(previous):
+                normalized[-1] = segment
+            logger.info(
+                "Resolved overlapping segments %s/%s at %.2f-%.2f",
+                previous.segment_id,
+                segment.segment_id,
+                segment.start,
+                previous.end,
+            )
+            continue
+        normalized.append(segment)
+    return normalized
+
+
 def _validate_candidate_segments(
     segments: list[SegmentAnalysis],
     *,
     source_duration: float,
     known_segment_ids: set[int],
-) -> None:
-    if not segments:
-        raise ClipSelectionProcessError("Clip candidate must include at least one segment.")
-
-    previous_end: float | None = None
-    for segment in segments:
-        if segment.segment_id not in known_segment_ids:
-            raise ClipSelectionProcessError(
-                f"Clip candidate references unknown segment ID {segment.segment_id}."
-            )
-        if segment.end <= segment.start:
-            raise ClipSelectionProcessError(
-                f"Invalid segment timing for segment {segment.segment_id}."
-            )
-        if previous_end is not None and segment.start < previous_end:
-            raise ClipSelectionProcessError(
-                "Clip candidate segments overlap or are out of order."
-            )
-        previous_end = segment.end
-
-    start = segments[0].start
-    end = segments[-1].end
-    duration = end - start
-    if duration <= 0:
+) -> list[SegmentAnalysis]:
+    normalized = _normalize_candidate_segments(
+        segments,
+        source_duration=source_duration,
+        known_segment_ids=known_segment_ids,
+    )
+    if not normalized:
+        raise ClipSelectionProcessError("Clip candidate must include at least one valid segment.")
+    start = normalized[0].start
+    end = normalized[-1].end
+    if end - start <= 0:
         raise ClipSelectionProcessError("Clip candidate duration must be positive.")
     if source_duration > 0 and end > source_duration + 0.05:
         raise ClipSelectionProcessError(
             "Clip candidate extends beyond the source video duration."
         )
+    return normalized
+
+
+def _options_for_duration_class(
+    base: ClipSelectionOptions,
+    duration_class: ClipDurationClass,
+) -> ClipSelectionOptions:
+    return ClipSelectionOptions(
+        min_duration_seconds=base.min_duration_seconds,
+        preferred_min_duration_seconds=duration_class.min_seconds,
+        preferred_max_duration_seconds=duration_class.max_seconds,
+        max_duration_seconds=duration_class.max_seconds,
+        max_gap_seconds=base.max_gap_seconds,
+        max_candidates=base.max_candidates,
+        min_score=base.min_score,
+        context_padding_seconds=base.context_padding_seconds,
+    )
 
 
 def _build_candidate(
@@ -546,37 +685,62 @@ def _build_candidate(
     known_segment_ids: set[int],
     options: ClipSelectionOptions,
     all_segments: list[SegmentAnalysis],
+    duration_class: ClipDurationClass | None = None,
 ) -> ClipCandidate | None:
     if not segments:
         return None
 
     segments = _trim_group_to_max_duration(segments, options)
-    segments = _expand_group_segments(segments, all_segments, options)
+    segments = _expand_group_segments(
+        segments,
+        all_segments,
+        options,
+        transcript_segments,
+    )
     segments = _trim_group_to_max_duration(segments, options)
 
-    _validate_candidate_segments(
-        segments,
-        source_duration=source_duration,
-        known_segment_ids=known_segment_ids,
-    )
+    try:
+        segments = _validate_candidate_segments(
+            segments,
+            source_duration=source_duration,
+            known_segment_ids=known_segment_ids,
+        )
+    except ClipSelectionProcessError as exc:
+        logger.warning("Candidate rejected during normalization: %s", exc.message)
+        return None
 
     start = segments[0].start
     end = segments[-1].end
     duration = round(end - start, 3)
-    if duration < options.min_duration_seconds or duration > options.max_duration_seconds:
-        return None
-
     hook_score = _hook_score(segments)
     payoff_score = _payoff_score(segments)
     standalone_score = _average_score(segments, "standalone_score")
     context_dependency_score = _average_score(segments, "context_dependency_score")
     primary_emotion = _dominant_emotion(segments)
-    score = _compute_candidate_score(
+    warnings: list[str] = []
+
+    if duration < options.min_duration_seconds:
+        if source_duration > 0 and end >= source_duration - 0.05 and start <= 0.05:
+            warnings.append("Clip reaches source media boundary and cannot expand to 15 seconds.")
+        else:
+            return None
+    elif duration > options.max_duration_seconds:
+        return None
+
+    if duration < options.preferred_min_duration_seconds:
+        warnings.append(
+            f"Clip duration {duration:.1f}s is below preferred minimum "
+            f"{options.preferred_min_duration_seconds:.0f}s."
+        )
+
+    score, score_breakdown = _compute_candidate_score(
         segments,
         hook_score=hook_score,
         payoff_score=payoff_score,
         standalone_score=standalone_score,
         context_dependency_score=context_dependency_score,
+        duration=duration,
+        options=options,
     )
     if score < options.min_score:
         return None
@@ -587,6 +751,10 @@ def _build_candidate(
         standalone_score=standalone_score,
         context_dependency_score=context_dependency_score,
     )
+
+    if duration_class is not None:
+        score_breakdown["duration_target_min"] = duration_class.min_seconds
+        score_breakdown["duration_target_max"] = duration_class.max_seconds
 
     return ClipCandidate(
         clip_id=str(uuid.uuid4()),
@@ -612,6 +780,10 @@ def _build_candidate(
             primary_emotion=primary_emotion,
         ),
         status=ClipCandidateStatus.PROPOSED,
+        warnings=warnings,
+        duration_exception_reason=None,
+        duration_class=duration_class.label if duration_class is not None else None,
+        score_breakdown=score_breakdown,
     )
 
 
@@ -619,7 +791,173 @@ def _candidates_overlap(first: ClipCandidate, second: ClipCandidate) -> bool:
     return first.start < second.end and second.start < first.end
 
 
+def _group_strength(group: list[SegmentAnalysis]) -> float:
+    return sum(_segment_strength(segment) for segment in group) / len(group)
+
+
+def _rank_seed_groups(groups: list[list[SegmentAnalysis]]) -> list[list[SegmentAnalysis]]:
+    return sorted(groups, key=_group_strength, reverse=True)
+
+
+def _duration_classes_for_selection(
+    group: list[SegmentAnalysis],
+    source_duration: float,
+) -> list[ClipDurationClass]:
+    span = group[-1].end - group[0].start
+    classes = [ClipDurationClass("short", settings.clip_selection_short_min_seconds, settings.clip_selection_short_max_seconds)]
+    if span >= settings.clip_selection_medium_min_seconds or source_duration >= settings.clip_selection_medium_min_seconds:
+        classes.append(
+            ClipDurationClass("medium", settings.clip_selection_medium_min_seconds, settings.clip_selection_medium_max_seconds)
+        )
+    if span >= settings.clip_selection_long_min_seconds:
+        classes.append(
+            ClipDurationClass("long", settings.clip_selection_long_min_seconds, settings.clip_selection_long_max_seconds)
+        )
+    return classes
+
+
+def _candidate_overlap_ratio(first: ClipCandidate, second: ClipCandidate) -> float:
+    overlap_start = max(first.start, second.start)
+    overlap_end = min(first.end, second.end)
+    if overlap_end <= overlap_start:
+        return 0.0
+    overlap = overlap_end - overlap_start
+    shorter = min(first.duration, second.duration)
+    return overlap / shorter if shorter > 0 else 0.0
+
+
+def _duration_preference_bonus(candidate: ClipCandidate) -> float:
+    preferred_max = settings.clip_selection_preferred_target_max_seconds
+    preferred_min = settings.clip_selection_preferred_min_duration_seconds
+    if preferred_min <= candidate.duration <= preferred_max:
+        return 8.0
+    if candidate.duration < preferred_min:
+        return -6.0
+    if candidate.duration <= preferred_max + 15.0:
+        return 2.0
+    return -2.0
+
+
+def _quality_first_final_selection(
+    candidates: list[ClipCandidate],
+    *,
+    max_count: int,
+    min_score: float,
+    source_duration: float,
+) -> list[ClipCandidate]:
+    eligible = [
+        candidate
+        for candidate in candidates
+        if candidate.duration + 0.01 >= settings.clip_selection_min_duration_seconds
+        or source_duration + 0.05 < settings.clip_selection_min_duration_seconds
+    ]
+    eligible = [candidate for candidate in eligible if candidate.score >= min_score]
+    eligible.sort(
+        key=lambda candidate: (
+            candidate.score + _duration_preference_bonus(candidate),
+            candidate.confidence,
+            -candidate.start,
+        ),
+        reverse=True,
+    )
+
+    selected: list[ClipCandidate] = []
+    for candidate in eligible:
+        if len(selected) >= max_count:
+            break
+        if any(_candidate_overlap_ratio(candidate, existing) >= 0.55 for existing in selected):
+            if not selected or candidate.score <= selected[-1].score + 4.0:
+                continue
+        same_class = [
+            existing
+            for existing in selected
+            if existing.duration_class == candidate.duration_class
+            and _candidate_overlap_ratio(candidate, existing) >= 0.35
+        ]
+        if same_class and candidate.score <= max(existing.score for existing in same_class) + 1.5:
+            continue
+        selected.append(candidate)
+
+    selected.sort(key=lambda candidate: candidate.start)
+    return selected
+
+
+def _validate_final_candidates(
+    candidates: list[ClipCandidate],
+    *,
+    source_duration: float,
+) -> list[ClipCandidate]:
+    validated: list[ClipCandidate] = []
+    for candidate in candidates:
+        if candidate.duration + 0.01 < settings.clip_selection_min_duration_seconds:
+            if source_duration + 0.05 >= settings.clip_selection_min_duration_seconds:
+                logger.warning(
+                    "Rejected final candidate %.2f-%.2f (%.2fs) below minimum duration.",
+                    candidate.start,
+                    candidate.end,
+                    candidate.duration,
+                )
+                continue
+        validated.append(candidate)
+    return validated
+
+
+def _sync_analysis_clip_flags(project_id: str, final_candidates: list[ClipCandidate]) -> None:
+    selected_segment_ids = {segment_id for candidate in final_candidates for segment_id in candidate.segment_ids}
+    analysis = load_project_analysis(project_id)
+    updated_segments = [
+        segment.model_copy(update={"clip_candidate": segment.segment_id in selected_segment_ids})
+        for segment in analysis.segments
+    ]
+    updated_document = analysis.model_copy(
+        update={
+            "segments": updated_segments,
+            "clip_candidate_count": sum(1 for segment in updated_segments if segment.clip_candidate),
+        }
+    )
+    from app.services.timeline_analysis import _write_analysis_atomically
+
+    _write_analysis_atomically(project_id, updated_document)
+
+
+def is_clip_candidates_document_current(document: ClipCandidatesDocument) -> bool:
+    return document.selection_pipeline_version == settings.clip_selection_pipeline_version
+
+
+def invalidate_stale_clip_candidates(project_id: str) -> bool:
+    output_path = get_clip_candidates_output_path(project_id)
+    if not output_path.exists():
+        return False
+    try:
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+        document = ClipCandidatesDocument.model_validate(payload)
+    except (json.JSONDecodeError, ValidationError):
+        return False
+    if is_clip_candidates_document_current(document):
+        return False
+    cleanup_clip_candidates_output(project_id)
+    project = load_project(project_id)
+    project.clip_selection_status = ProcessingStatus.PENDING
+    project.clip_candidates_path = None
+    project.clip_candidate_count = None
+    project.append_log(
+        "Stale clip candidates invalidated due to selection pipeline version change.",
+    )
+    save_project(project)
+    return True
+
+
 def _deduplicate_candidates(candidates: list[ClipCandidate]) -> list[ClipCandidate]:
+    logger.info("Clip candidates before overlap resolution: %s", len(candidates))
+    for candidate in candidates:
+        logger.info(
+            "Candidate start=%.2f end=%.2f duration=%.2f score=%.1f",
+            candidate.start,
+            candidate.end,
+            candidate.duration,
+            candidate.score,
+        )
+
     ranked = sorted(
         candidates,
         key=lambda candidate: (candidate.score, candidate.confidence, -candidate.start),
@@ -628,10 +966,42 @@ def _deduplicate_candidates(candidates: list[ClipCandidate]) -> list[ClipCandida
     kept: list[ClipCandidate] = []
 
     for candidate in ranked:
-        if any(_candidates_overlap(candidate, existing) for existing in kept):
+        overlapping = [existing for existing in kept if _candidates_overlap(candidate, existing)]
+        if not overlapping:
+            kept.append(candidate)
             continue
-        kept.append(candidate)
 
+        existing = overlapping[0]
+        if candidate.score > existing.score + 2.0:
+            kept.remove(existing)
+            kept.append(candidate)
+            logger.info(
+                "Resolved overlap by keeping higher-score candidate %.2f-%.2f over %.2f-%.2f",
+                candidate.start,
+                candidate.end,
+                existing.start,
+                existing.end,
+            )
+            continue
+
+        if candidate.start >= existing.start and candidate.end <= existing.end:
+            logger.info("Dropped near-duplicate candidate inside existing range")
+            continue
+
+        if existing.start <= candidate.start and existing.end >= candidate.end:
+            logger.info("Dropped lower-score candidate contained by existing range")
+            continue
+
+        logger.info(
+            "Resolved overlap by keeping existing candidate %.2f-%.2f over %.2f-%.2f",
+            existing.start,
+            existing.end,
+            candidate.start,
+            candidate.end,
+        )
+
+    kept.sort(key=lambda candidate: candidate.start)
+    logger.info("Clip candidates after overlap resolution: %s", len(kept))
     return kept
 
 
@@ -669,6 +1039,8 @@ def select_project_clips(
     max_candidates: int | None = None,
     min_score: float | None = None,
 ) -> ClipCandidatesDocument:
+    selection_started = time.perf_counter()
+    log_stage_event("clip_selection", "start", project_id=project_id)
     options = resolve_selection_options(
         min_duration_seconds=min_duration_seconds,
         max_duration_seconds=max_duration_seconds,
@@ -682,28 +1054,59 @@ def select_project_clips(
     known_segment_ids = set(transcript_segments)
 
     try:
-        groups = _group_seed_segments(analysis.segments, options.max_gap_seconds)
+        cleanup_clip_candidates_output(project_id)
+        groups = _rank_seed_groups(_group_seed_segments(analysis.segments, options.max_gap_seconds))
+        groups = groups[: max(1, settings.clip_selection_max_seed_groups)]
         raw_candidates: list[ClipCandidate] = []
 
+        construction_started = time.perf_counter()
         for group in groups:
-            candidate = _build_candidate(
-                group,
-                transcript_segments,
-                source_duration=source_duration,
-                known_segment_ids=known_segment_ids,
-                options=options,
-                all_segments=analysis.segments,
-            )
-            if candidate is not None:
-                raw_candidates.append(candidate)
-
-        deduplicated = _deduplicate_candidates(raw_candidates)
-        deduplicated.sort(
-            key=lambda candidate: (candidate.score, candidate.confidence, -candidate.start),
-            reverse=True,
+            for duration_class in _duration_classes_for_selection(group, source_duration):
+                class_options = _options_for_duration_class(options, duration_class)
+                candidate = _build_candidate(
+                    group,
+                    transcript_segments,
+                    source_duration=source_duration,
+                    known_segment_ids=known_segment_ids,
+                    options=class_options,
+                    all_segments=analysis.segments,
+                    duration_class=duration_class,
+                )
+                if candidate is not None:
+                    raw_candidates.append(candidate)
+                if len(raw_candidates) >= settings.clip_selection_max_candidates_before_ranking:
+                    break
+            if len(raw_candidates) >= settings.clip_selection_max_candidates_before_ranking:
+                break
+        log_stage_event(
+            "constructing_candidates",
+            "complete",
+            project_id=project_id,
+            candidates=len(raw_candidates),
+            elapsed=f"{time.perf_counter() - construction_started:.3f}s",
         )
-        final_candidates = deduplicated[: options.max_candidates]
 
+        ranking_started = time.perf_counter()
+        deduplicated = _deduplicate_candidates(raw_candidates)
+        final_candidates = _quality_first_final_selection(
+            deduplicated,
+            max_count=options.max_candidates,
+            min_score=options.min_score,
+            source_duration=source_duration,
+        )
+        final_candidates = _validate_final_candidates(
+            final_candidates,
+            source_duration=source_duration,
+        )
+        log_stage_event(
+            "ranking_candidates",
+            "complete",
+            project_id=project_id,
+            candidates=len(final_candidates),
+            elapsed=f"{time.perf_counter() - ranking_started:.3f}s",
+        )
+
+        persistence_started = time.perf_counter()
         document = ClipCandidatesDocument(
             project_id=project_id,
             candidate_count=len(final_candidates),
@@ -713,9 +1116,26 @@ def select_project_clips(
             max_candidates=options.max_candidates,
             source_duration_seconds=source_duration,
             candidates=final_candidates,
+            selection_pipeline_version=settings.clip_selection_pipeline_version,
+            analysis_pipeline_version=settings.analysis_pipeline_version,
         )
         document = _validate_document(document)
         _write_clip_candidates_atomically(project_id, document)
+        _sync_analysis_clip_flags(project_id, final_candidates)
+        log_stage_event(
+            "saving_results",
+            "complete",
+            project_id=project_id,
+            elapsed=f"{time.perf_counter() - persistence_started:.3f}s",
+        )
+        log_timing_summary(
+            project_id=project_id,
+            pipeline="clip_selection",
+            total_seconds=time.perf_counter() - selection_started,
+            candidates=document.candidate_count,
+            raw_candidates=len(raw_candidates),
+            deduplicated=len(deduplicated),
+        )
         return document
     except (
         ClipSelectionTranscriptRequiredError,
@@ -732,6 +1152,14 @@ def select_project_clips(
         ) from exc
 
 
+def load_clip_candidate(project_id: str, candidate_id: str) -> ClipCandidate:
+    document = load_project_clip_candidates(project_id)
+    for candidate in document.candidates:
+        if candidate.clip_id == candidate_id:
+            return candidate
+    raise ClipCandidatesNotFoundError(f"Clip candidate '{candidate_id}' was not found.")
+
+
 def load_project_clip_candidates(project_id: str) -> ClipCandidatesDocument:
     load_project(project_id)
 
@@ -743,6 +1171,12 @@ def load_project_clip_candidates(project_id: str) -> ClipCandidatesDocument:
 
     try:
         payload = json.loads(output_path.read_text(encoding="utf-8"))
-        return ClipCandidatesDocument.model_validate(payload)
+        document = ClipCandidatesDocument.model_validate(payload)
     except (json.JSONDecodeError, ValidationError) as exc:
         raise ClipSelectionProcessError("Clip candidates file is corrupted.") from exc
+
+    if not is_clip_candidates_document_current(document):
+        raise ClipCandidatesNotFoundError(
+            "Clip candidates are outdated for the current selection pipeline. Run Select Clips again."
+        )
+    return document

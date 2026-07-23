@@ -103,6 +103,16 @@ def _validate_export_times(
         )
 
     duration = end_time - start_time
+    if duration < settings.clip_export_min_duration_seconds:
+        if source_duration + 0.05 < settings.clip_export_min_duration_seconds:
+            pass
+        else:
+            raise ClipExportValidationError(
+                f"Clip duration ({duration:.3f}s) is below the minimum allowed "
+                f"({settings.clip_export_min_duration_seconds:.1f}s). "
+                "Use Select Clips to generate complete 15–30 second candidates."
+            )
+
     if duration > settings.clip_export_max_duration_seconds:
         raise ClipExportValidationError(
             f"Clip duration ({duration:.3f}s) exceeds the maximum allowed "

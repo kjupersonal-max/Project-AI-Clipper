@@ -10,6 +10,7 @@ import {
   filterAndSortExportedClips,
   getClipDisplayName,
   isCaptionedExport,
+  partitionExportedClips,
   type ExportedClipSort,
 } from "@/lib/exported-clips-library";
 import { getCaptionedExportLabel } from "@/lib/caption-render-mapping";
@@ -97,6 +98,7 @@ type ExportedClipCardProps = {
   onFavorite?: (clipId: string, isFavorite: boolean) => Promise<void>;
   onEdit?: (clip: ExportClipResponse) => void;
   onCaptions?: (clip: ExportClipResponse) => void;
+  isLegacy?: boolean;
 };
 
 function ExportedClipCard({
@@ -107,6 +109,7 @@ function ExportedClipCard({
   onFavorite,
   onEdit,
   onCaptions,
+  isLegacy = false,
 }: ExportedClipCardProps) {
   const mediaUrl = resolveMediaUrl(clip.media_url);
   const displayName = getClipDisplayName(clip);
@@ -172,6 +175,7 @@ function ExportedClipCard({
       <div className="space-y-4 px-4 py-4">
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="success">Exported clip</Badge>
+          {isLegacy ? <Badge variant="warning">Legacy export</Badge> : null}
           <Badge variant={statusVariant(clip.export_status)}>{clip.export_status}</Badge>
           {clip.is_favorite ? <Badge variant="warning">Favorite</Badge> : null}
         </div>
@@ -484,9 +488,19 @@ export function ExportedClipsPanel({
   const [searchQuery, setSearchQuery] = useState("");
   const [sort, setSort] = useState<ExportedClipSort>(defaultExportedClipSort);
 
+  const { currentExports, legacyExports } = useMemo(
+    () => partitionExportedClips(exportedClips),
+    [exportedClips],
+  );
+
   const visibleClips = useMemo(
-    () => filterAndSortExportedClips(exportedClips, searchQuery, sort),
-    [exportedClips, searchQuery, sort],
+    () => filterAndSortExportedClips(currentExports, searchQuery, sort),
+    [currentExports, searchQuery, sort],
+  );
+
+  const visibleLegacyClips = useMemo(
+    () => filterAndSortExportedClips(legacyExports, searchQuery, sort),
+    [legacyExports, searchQuery, sort],
   );
 
   async function handleRename(clipId: string, clipName: string) {
@@ -593,7 +607,7 @@ export function ExportedClipsPanel({
         <Video className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500" />
         <div>
           <p className="text-sm text-zinc-500">
-            No exported clips yet. Use Export on a timeline clip candidate to render an MP4.
+            No exported clips yet. Export a final clip candidate to render an MP4.
           </p>
         </div>
       </div>
@@ -678,6 +692,31 @@ export function ExportedClipsPanel({
           ))}
         </div>
       )}
+
+      {visibleLegacyClips.length > 0 ? (
+        <div className="space-y-3 border-t border-zinc-800 pt-5">
+          <div>
+            <h3 className="text-sm font-medium text-zinc-200">Legacy exports</h3>
+            <p className="mt-1 text-xs text-zinc-500">
+              Older sub-15-second exports kept for reference. They are not part of the current final
+              clip candidates.
+            </p>
+          </div>
+          {visibleLegacyClips.map((clip) => (
+            <ExportedClipCard
+              key={clip.clip_id}
+              clip={clip}
+              isLegacy
+              actionState={clipActions[clip.clip_id]}
+              onRename={onRename ? handleRename : undefined}
+              onDelete={onDelete ? handleDelete : undefined}
+              onFavorite={onFavorite ? handleFavorite : undefined}
+              onEdit={onEdit}
+              onCaptions={onCaptions}
+            />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

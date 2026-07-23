@@ -19,6 +19,31 @@ class ProcessingStatus(str, Enum):
     SKIPPED = "skipped"
 
 
+class TranscriptTier(str, Enum):
+    LEGACY = "legacy"
+    DISCOVERY = "discovery"
+    FULL_QUALITY = "full_quality"
+    CLIP_QUALITY = "clip_quality"
+
+
+class ChunkProcessingStatus(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CACHED = "cached"
+
+
+class PipelineStage(str, Enum):
+    DISCOVERY_TRANSCRIPTION = "discovery_transcription"
+    DISCOVERY_CHUNK = "discovery_chunk"
+    CHUNK_ANALYSIS = "chunk_analysis"
+    CANDIDATE_GENERATION = "candidate_generation"
+    GLOBAL_RANKING = "global_ranking"
+    CLIP_RETRANSCRIPTION = "clip_retranscription"
+    FINAL_CAPTION_READY = "final_caption_ready"
+
+
 class ActivityLogEntry(BaseModel):
     timestamp: str
     level: str = "info"
@@ -53,11 +78,28 @@ class ProjectMetadata(BaseModel):
     extracted_audio_path: str | None = None
     extracted_audio_duration_seconds: float | None = None
     transcript_path: str | None = None
+    discovery_transcript_path: str | None = None
+    active_transcript_tier: TranscriptTier | None = None
     detected_language: str | None = None
     transcription_started_at: str | None = None
     transcription_completed_at: str | None = None
+    transcription_quality_mode: str | None = None
+    transcription_stage: str | None = None
+    transcription_progress_pct: float | None = None
+    discovery_transcription_status: ProcessingStatus = ProcessingStatus.PENDING
+    discovery_transcription_stage: str | None = None
+    discovery_transcription_progress_pct: float | None = None
+    discovery_chunks_completed: int | None = None
+    discovery_chunks_total: int | None = None
+    discovery_chunks_remaining: int | None = None
+    pipeline_stage: str | None = None
+    clip_retranscription_status: ProcessingStatus = ProcessingStatus.PENDING
+    clip_retranscription_progress_pct: float | None = None
+    vocabulary_hints: str | None = None
     analysis_status: ProcessingStatus = ProcessingStatus.PENDING
     analysis_path: str | None = None
+    analysis_stage: str | None = None
+    analysis_progress_pct: float | None = None
     analysis_started_at: str | None = None
     analysis_completed_at: str | None = None
     analysis_provider: str | None = None
@@ -93,11 +135,28 @@ class ProjectResponse(BaseModel):
     extracted_audio_path: str | None = None
     extracted_audio_duration_seconds: float | None = None
     transcript_path: str | None = None
+    discovery_transcript_path: str | None = None
+    active_transcript_tier: TranscriptTier | None = None
     detected_language: str | None = None
     transcription_started_at: str | None = None
     transcription_completed_at: str | None = None
+    transcription_quality_mode: str | None = None
+    transcription_stage: str | None = None
+    transcription_progress_pct: float | None = None
+    discovery_transcription_status: ProcessingStatus = ProcessingStatus.PENDING
+    discovery_transcription_stage: str | None = None
+    discovery_transcription_progress_pct: float | None = None
+    discovery_chunks_completed: int | None = None
+    discovery_chunks_total: int | None = None
+    discovery_chunks_remaining: int | None = None
+    pipeline_stage: str | None = None
+    clip_retranscription_status: ProcessingStatus = ProcessingStatus.PENDING
+    clip_retranscription_progress_pct: float | None = None
+    vocabulary_hints: str | None = None
     analysis_status: ProcessingStatus
     analysis_path: str | None = None
+    analysis_stage: str | None = None
+    analysis_progress_pct: float | None = None
     analysis_started_at: str | None = None
     analysis_completed_at: str | None = None
     analysis_provider: str | None = None
@@ -144,6 +203,18 @@ class TranscriptSegment(BaseModel):
     words: list[TranscriptWord] = Field(default_factory=list)
 
 
+class TranscriptionQualityRating(str, Enum):
+    GOOD = "good"
+    REVIEW_RECOMMENDED = "review_recommended"
+    POOR = "poor"
+
+
+class TranscriptionQualityMode(str, Enum):
+    FAST = "fast"
+    BALANCED = "balanced"
+    HIGH_ACCURACY = "high_accuracy"
+
+
 class TranscriptDocument(BaseModel):
     project_id: str
     language: str
@@ -152,6 +223,24 @@ class TranscriptDocument(BaseModel):
     word_count: int
     segments: list[TranscriptSegment]
     created_at: str = Field(default_factory=utc_now_iso)
+    quality_mode: TranscriptionQualityMode | None = None
+    quality_rating: TranscriptionQualityRating | None = None
+    quality_warnings: list[str] = Field(default_factory=list)
+    vocabulary_hints: str | None = None
+    transcription_revision: int = 1
+    transcript_tier: TranscriptTier = TranscriptTier.LEGACY
+    chunk_index: int | None = None
+    chunk_start: float | None = None
+    chunk_end: float | None = None
+    clip_id: str | None = None
+    candidate_id: str | None = None
+
+
+class TranscribeRequest(BaseModel):
+    quality_mode: TranscriptionQualityMode | None = None
+    vocabulary_hints: str | None = None
+    preserve_manual_edits: bool = False
+    use_full_quality: bool = False
 
 
 class TranscribeResponse(BaseModel):
@@ -162,6 +251,18 @@ class TranscribeResponse(BaseModel):
     segment_count: int
     word_count: int
     transcript_path: str
+    transcript_tier: TranscriptTier | None = None
+    quality_mode: TranscriptionQualityMode | None = None
+    quality_rating: TranscriptionQualityRating | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class TranscriptionDiagnosticsRequest(BaseModel):
+    quality_mode: TranscriptionQualityMode | None = None
+    vocabulary_hints: str | None = None
+    language: str | None = None
+    clip_start: float | None = None
+    clip_end: float | None = None
 
 
 class SegmentAnalysis(BaseModel):
@@ -225,6 +326,10 @@ class ClipCandidate(BaseModel):
     title_suggestion: str
     reason: str
     status: ClipCandidateStatus = ClipCandidateStatus.PROPOSED
+    warnings: list[str] = Field(default_factory=list)
+    duration_exception_reason: str | None = None
+    duration_class: str | None = None
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
 
 
 class ClipCandidatesDocument(BaseModel):
@@ -236,6 +341,8 @@ class ClipCandidatesDocument(BaseModel):
     max_candidates: int
     source_duration_seconds: float
     candidates: list[ClipCandidate]
+    selection_pipeline_version: str | None = None
+    analysis_pipeline_version: str | None = None
     created_at: str = Field(default_factory=utc_now_iso)
 
 
@@ -430,6 +537,11 @@ class CaptionSegment(BaseModel):
     sequence: int = Field(ge=0)
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
+    manually_edited: bool = False
+    original_transcription_text: str | None = None
+    transcription_revision: int | None = None
+    low_confidence: bool = False
+    overlapping_speech: bool = False
 
 
 class ClipCaptionsDocument(BaseModel):
@@ -443,6 +555,10 @@ class ClipCaptionsDocument(BaseModel):
     style: CaptionStyle | None = None
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
+    transcription_quality_mode: TranscriptionQualityMode | None = None
+    transcription_quality_rating: TranscriptionQualityRating | None = None
+    transcription_warnings: list[str] = Field(default_factory=list)
+    vocabulary_hints: str | None = None
 
 
 class ClipCaptionsResponse(BaseModel):
@@ -456,6 +572,10 @@ class ClipCaptionsResponse(BaseModel):
     style: CaptionStyle
     created_at: str
     updated_at: str
+    transcription_quality_mode: TranscriptionQualityMode | None = None
+    transcription_quality_rating: TranscriptionQualityRating | None = None
+    transcription_warnings: list[str] = Field(default_factory=list)
+    vocabulary_hints: str | None = None
 
 
 class UpdateCaptionSegmentRequest(BaseModel):
@@ -481,6 +601,77 @@ class DeleteCaptionsResponse(BaseModel):
     message: str
 
 
+class RetranscribeRangeRequest(BaseModel):
+    start_time: float = Field(ge=0.0)
+    end_time: float = Field(gt=0.0)
+    quality_mode: TranscriptionQualityMode | None = None
+    vocabulary_hints: str | None = None
+
+
+class RetranscribeRangePreviewResponse(BaseModel):
+    project_id: str
+    clip_id: str
+    start_time: float
+    end_time: float
+    preview_segments: list[CaptionSegment]
+    quality_rating: TranscriptionQualityRating | None = None
+    warnings: list[str] = Field(default_factory=list)
+    manual_edit_warnings: list[str] = Field(default_factory=list)
+
+
+class ApplyRetranscribeRangeRequest(BaseModel):
+    start_time: float = Field(ge=0.0)
+    end_time: float = Field(gt=0.0)
+    preview_segments: list[UpdateCaptionSegmentRequest]
+    mode: str = "replace"
+
+
+class InsertCaptionWordRequest(BaseModel):
+    segment_id: str
+    word: str
+    start: float = Field(ge=0.0)
+    end: float = Field(gt=0.0)
+
+
+class InsertCaptionSegmentRequest(BaseModel):
+    text: str
+    start: float = Field(ge=0.0)
+    end: float = Field(gt=0.0)
+
+
+class SplitCaptionSegmentRequest(BaseModel):
+    segment_id: str
+    split_time: float = Field(ge=0.0)
+
+
+class MergeCaptionSegmentsRequest(BaseModel):
+    first_segment_id: str
+    second_segment_id: str
+
+
+class NudgeCaptionTimingRequest(BaseModel):
+    segment_id: str
+    delta_seconds: float
+
+
+class DeleteCaptionWordRequest(BaseModel):
+    segment_id: str
+    word_index: int = Field(ge=0)
+
+
+class UpdateVocabularyHintsRequest(BaseModel):
+    vocabulary_hints: str | None = None
+
+
+class TranscriptionQualityResponse(BaseModel):
+    project_id: str
+    clip_id: str | None = None
+    quality_mode: TranscriptionQualityMode | None = None
+    quality_rating: TranscriptionQualityRating | None = None
+    warnings: list[str] = Field(default_factory=list)
+    manual_edit_count: int = 0
+
+
 def project_to_response(project: ProjectMetadata) -> ProjectResponse:
     return ProjectResponse(
         project_id=project.project_id,
@@ -494,11 +685,28 @@ def project_to_response(project: ProjectMetadata) -> ProjectResponse:
         extracted_audio_path=project.extracted_audio_path,
         extracted_audio_duration_seconds=project.extracted_audio_duration_seconds,
         transcript_path=project.transcript_path,
+        discovery_transcript_path=project.discovery_transcript_path,
+        active_transcript_tier=project.active_transcript_tier,
         detected_language=project.detected_language,
         transcription_started_at=project.transcription_started_at,
         transcription_completed_at=project.transcription_completed_at,
+        transcription_quality_mode=project.transcription_quality_mode,
+        transcription_stage=project.transcription_stage,
+        transcription_progress_pct=project.transcription_progress_pct,
+        discovery_transcription_status=project.discovery_transcription_status,
+        discovery_transcription_stage=project.discovery_transcription_stage,
+        discovery_transcription_progress_pct=project.discovery_transcription_progress_pct,
+        discovery_chunks_completed=project.discovery_chunks_completed,
+        discovery_chunks_total=project.discovery_chunks_total,
+        discovery_chunks_remaining=project.discovery_chunks_remaining,
+        pipeline_stage=project.pipeline_stage,
+        clip_retranscription_status=project.clip_retranscription_status,
+        clip_retranscription_progress_pct=project.clip_retranscription_progress_pct,
+        vocabulary_hints=project.vocabulary_hints,
         analysis_status=project.analysis_status,
         analysis_path=project.analysis_path,
+        analysis_stage=project.analysis_stage,
+        analysis_progress_pct=project.analysis_progress_pct,
         analysis_started_at=project.analysis_started_at,
         analysis_completed_at=project.analysis_completed_at,
         analysis_provider=project.analysis_provider,

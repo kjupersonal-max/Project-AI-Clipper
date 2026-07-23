@@ -385,6 +385,106 @@ def extract_project_audio(project_id: str) -> tuple[str, float | None]:
     return relative_path, duration
 
 
+def extract_audio_segment_to_wav(
+    *,
+    video_path: Path,
+    output_path: Path,
+    start_time: float,
+    end_time: float,
+) -> None:
+    ensure_ffmpeg_tools()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_output = output_path.with_suffix(".part.wav")
+    if temp_output.exists():
+        temp_output.unlink()
+
+    duration = max(0.001, end_time - start_time)
+    command = [
+        _get_ffmpeg_path(),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-ss",
+        f"{start_time:.3f}",
+        "-i",
+        str(video_path),
+        "-t",
+        f"{duration:.3f}",
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "pcm_s16le",
+        "-y",
+        str(temp_output),
+    ]
+
+    try:
+        result = _run_command(command, timeout_seconds=settings.ffmpeg_timeout_seconds)
+        if result.returncode != 0:
+            raise FFmpegProcessError(_sanitize_ffmpeg_error(result.stderr))
+        if not temp_output.exists() or temp_output.stat().st_size == 0:
+            raise FFmpegProcessError("Audio segment extraction produced an empty output file.")
+        if output_path.exists():
+            output_path.unlink()
+        temp_output.replace(output_path)
+    except Exception:
+        if temp_output.exists():
+            temp_output.unlink()
+        raise
+
+
+def extract_audio_chunk_from_wav(
+    *,
+    source_audio: Path,
+    output_path: Path,
+    start_time: float,
+    duration: float,
+) -> None:
+    ensure_ffmpeg_tools()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_output = output_path.with_suffix(".part.wav")
+    if temp_output.exists():
+        temp_output.unlink()
+
+    command = [
+        _get_ffmpeg_path(),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-ss",
+        f"{max(0.0, start_time):.3f}",
+        "-i",
+        str(source_audio),
+        "-t",
+        f"{max(0.001, duration):.3f}",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "pcm_s16le",
+        "-y",
+        str(temp_output),
+    ]
+
+    try:
+        result = _run_command(command, timeout_seconds=settings.ffmpeg_timeout_seconds)
+        if result.returncode != 0:
+            raise FFmpegProcessError(_sanitize_ffmpeg_error(result.stderr))
+        if not temp_output.exists() or temp_output.stat().st_size == 0:
+            raise FFmpegProcessError("Audio chunk extraction produced an empty output file.")
+        if output_path.exists():
+            output_path.unlink()
+        temp_output.replace(output_path)
+    except Exception:
+        if temp_output.exists():
+            temp_output.unlink()
+        raise
+
+
 def cleanup_audio_output(project_id: str) -> None:
     audio_dir = settings.audio_dir / project_id
     if audio_dir.exists():

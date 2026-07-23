@@ -15,6 +15,11 @@ export type CaptionSegment = {
   sequence: number;
   created_at: string;
   updated_at: string;
+  manually_edited?: boolean;
+  original_transcription_text?: string | null;
+  transcription_revision?: number | null;
+  low_confidence?: boolean;
+  overlapping_speech?: boolean;
 };
 
 export type ClipCaptions = {

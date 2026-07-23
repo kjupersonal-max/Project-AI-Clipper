@@ -198,54 +198,31 @@ describe("ClipCandidatesPanel export UI", () => {
 });
 
 describe("TimelineAnalysisPanel export UI", () => {
-  it("shows Export only on clip candidate segments", () => {
+  it("does not expose export actions on analysis segments", () => {
     render(
       <TimelineAnalysisPanel
         analysis={analysis}
         filters={defaultAnalysisFilters}
         onSeek={() => undefined}
-        onExportSegment={() => undefined}
       />,
     );
 
-    expect(screen.getAllByRole("button", { name: /^export$/i })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /^export$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retry export/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/internal timeline analysis/i)).toBeInTheDocument();
   });
 
-  it("calls onExportSegment when Export is clicked", async () => {
-    const user = userEvent.setup();
-    const onExportSegment = vi.fn();
-
+  it("labels flagged segments as analysis signals rather than final clips", () => {
     render(
       <TimelineAnalysisPanel
         analysis={analysis}
         filters={defaultAnalysisFilters}
         onSeek={() => undefined}
-        onExportSegment={onExportSegment}
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /^export$/i }));
-    expect(onExportSegment).toHaveBeenCalledWith(segment);
-  });
-
-  it("disables export while exporting", async () => {
-    const user = userEvent.setup();
-    const onExportSegment = vi.fn();
-
-    render(
-      <TimelineAnalysisPanel
-        analysis={analysis}
-        filters={defaultAnalysisFilters}
-        onSeek={() => undefined}
-        exportStates={{ "segment-7": { status: "exporting" } }}
-        onExportSegment={onExportSegment}
-      />,
-    );
-
-    const exportButton = screen.getByRole("button", { name: /exporting/i });
-    expect(exportButton).toBeDisabled();
-    await user.click(exportButton);
-    expect(onExportSegment).not.toHaveBeenCalled();
+    expect(screen.getByText("Analysis signal")).toBeInTheDocument();
+    expect(screen.queryByText("Clip candidate")).not.toBeInTheDocument();
   });
 });
 
@@ -604,7 +581,7 @@ describe("ExportedClipsPanel", () => {
         clip_name: "Short Clip",
         filename: "short.mp4",
         created_at: "2026-07-22T09:00:00Z",
-        duration: 5,
+        duration: 16,
         is_favorite: false,
       },
       {
