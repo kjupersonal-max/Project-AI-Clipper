@@ -6,6 +6,8 @@ from app.models.project import (
     AnalyzeResponse,
     ClipCandidatesDocument,
     ClipExportsListResponse,
+    ClipCaptionsResponse,
+    DeleteCaptionsResponse,
     DeleteClipResponse,
     ExportClipRequest,
     ExportClipResponse,
@@ -20,6 +22,7 @@ from app.models.project import (
     SelectClipsResponse,
     TranscribeResponse,
     TranscriptDocument,
+    UpdateCaptionsRequest,
     project_to_response,
     utc_now_iso,
 )
@@ -43,6 +46,15 @@ from app.services.clip_selection import (
     cleanup_clip_candidates_output,
     load_project_clip_candidates,
     select_project_clips,
+)
+from app.services.clip_captions import (
+    ClipCaptionsGenerationError,
+    ClipCaptionsNotFoundError,
+    ClipCaptionsValidationError,
+    generate_clip_captions,
+    get_clip_captions,
+    reset_clip_captions,
+    update_clip_captions,
 )
 from app.services.clip_export import (
     ClipExportNotFoundError,
@@ -302,6 +314,99 @@ def delete_project_exported_clip(project_id: str, clip_id: str) -> DeleteClipRes
         clip_id=clip_id,
         message="Exported clip deleted successfully.",
     )
+
+
+@router.post(
+    "/{project_id}/clips/{clip_id}/captions/generate",
+    response_model=ClipCaptionsResponse,
+)
+def generate_project_clip_captions(project_id: str, clip_id: str) -> ClipCaptionsResponse:
+    validate_project_id(project_id)
+    project = load_project(project_id)
+
+    project.append_log(f"Caption generation started for clip {clip_id}.")
+    save_project(project)
+
+    try:
+        response = generate_clip_captions(project_id, clip_id)
+        project = load_project(project_id)
+        project.append_log(
+            f"Caption generation completed for clip {clip_id} ({len(response.segments)} segments)."
+        )
+        project.last_error = None
+        save_project(project)
+        return response
+    except ClipExportNotFoundError as exc:
+        project = load_project(project_id)
+        project.last_error = exc.message
+        project.append_log(f"Caption generation failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsGenerationError as exc:
+        project = load_project(project_id)
+        project.last_error = exc.message
+        project.append_log(f"Caption generation failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+    except ClipCaptionsValidationError as exc:
+        project = load_project(project_id)
+        project.last_error = exc.message
+        project.append_log(f"Caption generation failed: {exc.message}", level="error")
+        save_project(project)
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+
+
+@router.get(
+    "/{project_id}/clips/{clip_id}/captions",
+    response_model=ClipCaptionsResponse,
+)
+def get_project_clip_captions(project_id: str, clip_id: str) -> ClipCaptionsResponse:
+    validate_project_id(project_id)
+
+    try:
+        return get_clip_captions(project_id, clip_id)
+    except ClipExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsValidationError as exc:
+        raise HTTPException(status_code=500, detail=exc.message) from exc
+
+
+@router.put(
+    "/{project_id}/clips/{clip_id}/captions",
+    response_model=ClipCaptionsResponse,
+)
+def update_project_clip_captions(
+    project_id: str,
+    clip_id: str,
+    request: UpdateCaptionsRequest,
+) -> ClipCaptionsResponse:
+    validate_project_id(project_id)
+
+    try:
+        return update_clip_captions(project_id, clip_id, request.segments)
+    except ClipExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+
+
+@router.delete(
+    "/{project_id}/clips/{clip_id}/captions",
+    response_model=DeleteCaptionsResponse,
+)
+def delete_project_clip_captions(project_id: str, clip_id: str) -> DeleteCaptionsResponse:
+    validate_project_id(project_id)
+
+    try:
+        return reset_clip_captions(project_id, clip_id)
+    except ClipExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
 
 
 @router.post("/{project_id}/inspect", response_model=InspectResponse)

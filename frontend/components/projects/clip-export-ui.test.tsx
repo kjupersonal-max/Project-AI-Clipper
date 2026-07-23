@@ -785,6 +785,21 @@ describe("ExportedClipsPanel", () => {
     expect(onEdit).toHaveBeenCalledWith(exportedClip);
   });
 
+  it("shows captions button when onCaptions is provided", async () => {
+    const user = userEvent.setup();
+    const onCaptions = vi.fn();
+
+    render(
+      <ExportedClipsPanel
+        exportedClips={[exportedClip]}
+        onCaptions={onCaptions}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /^captions$/i }));
+    expect(onCaptions).toHaveBeenCalledWith(exportedClip);
+  });
+
   it("keeps trimmed clip visible in search and sort views", () => {
     const trimmedClip: ExportClipResponse = {
       ...exportedClip,

@@ -202,6 +202,16 @@ def get_clip_exports_manifest_path(project_id: str) -> Path:
     return get_clips_output_dir(project_id) / settings.clip_exports_manifest_filename
 
 
+def get_clip_captions_dir(project_id: str) -> Path:
+    captions_dir = get_clips_output_dir(project_id) / settings.clip_captions_subdir
+    captions_dir.mkdir(parents=True, exist_ok=True)
+    return captions_dir
+
+
+def get_clip_captions_path(project_id: str, clip_id: str) -> Path:
+    return get_clip_captions_dir(project_id) / f"{clip_id}.json"
+
+
 def get_relative_clip_path(project_id: str, filename: str) -> str:
     return f"{project_id}/{settings.clip_export_subdir}/{filename}"
 

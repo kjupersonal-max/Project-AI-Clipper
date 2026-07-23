@@ -1,12 +1,16 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   deleteProjectClip,
+  deleteProjectClipCaptions,
   exportProjectClip,
   favoriteProjectClip,
+  fetchProjectClipCaptions,
   fetchProjectClipExports,
+  generateProjectClipCaptions,
   renameProjectClip,
   resolveMediaUrl,
   trimProjectClip,
+  updateProjectClipCaptions,
 } from "@/lib/api/projects";
 
 describe("exportProjectClip", () => {
@@ -357,5 +361,117 @@ describe("favoriteProjectClip", () => {
       message: "Exported clip 'clip-1' was not found.",
       status: 404,
     });
+  });
+});
+
+describe("clip caption API helpers", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("posts caption generation requests", async () => {
+    const mockResponse = {
+      project_id: "project-1",
+      clip_id: "clip-1",
+      source_start_time: 1,
+      source_end_time: 5,
+      duration: 4,
+      candidate_id: null,
+      segments: [],
+      created_at: "2026-07-22T18:00:00Z",
+      updated_at: "2026-07-22T18:00:00Z",
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockResponse,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await generateProjectClipCaptions("project-1", "clip-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/api/projects/project-1/clips/clip-1/captions/generate",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(result).toEqual(mockResponse);
+  });
+
+  it("loads saved captions", async () => {
+    const mockResponse = {
+      project_id: "project-1",
+      clip_id: "clip-1",
+      source_start_time: 1,
+      source_end_time: 5,
+      duration: 4,
+      candidate_id: null,
+      segments: [
+        {
+          id: "cap-1",
+          text: "Hello",
+          start: 0,
+          end: 1,
+          words: [],
+          sequence: 0,
+          created_at: "t",
+          updated_at: "t",
+        },
+      ],
+      created_at: "2026-07-22T18:00:00Z",
+      updated_at: "2026-07-22T18:00:00Z",
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockResponse,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchProjectClipCaptions("project-1", "clip-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/api/projects/project-1/clips/clip-1/captions",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(result.segments).toHaveLength(1);
+  });
+
+  it("updates captions with PUT payload", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ project_id: "project-1", clip_id: "clip-1", segments: [] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await updateProjectClipCaptions("project-1", "clip-1", {
+      segments: [{ id: "cap-1", text: "Updated", start: 0, end: 1, sequence: 0 }],
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/api/projects/project-1/clips/clip-1/captions",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          segments: [{ id: "cap-1", text: "Updated", start: 0, end: 1, sequence: 0 }],
+        }),
+      }),
+    );
+  });
+
+  it("deletes captions", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        project_id: "project-1",
+        clip_id: "clip-1",
+        message: "Captions deleted successfully.",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await deleteProjectClipCaptions("project-1", "clip-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/api/projects/project-1/clips/clip-1/captions",
+      expect.objectContaining({ method: "DELETE" }),
+    );
   });
 });

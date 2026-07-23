@@ -20,6 +20,7 @@ from app.services.clip_selection import (
     load_project_clip_candidates,
 )
 from app.services.project_store import (
+    get_clip_captions_path,
     get_clip_exports_manifest_path,
     get_clips_output_dir,
     get_relative_clip_path,
@@ -492,6 +493,10 @@ def delete_project_clip(project_id: str, clip_id: str) -> ExportedClipRecord:
     clip_path = clips_dir / record.filename
     if clip_path.exists() and clip_path.is_file():
         clip_path.unlink()
+
+    captions_path = get_clip_captions_path(project_id, clip_id)
+    if captions_path.exists() and captions_path.is_file():
+        captions_path.unlink()
 
     document.exports = [export for export in document.exports if export.clip_id != clip_id]
     _write_exports_document(document)

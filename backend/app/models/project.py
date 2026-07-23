@@ -333,6 +333,66 @@ class ClipExportsListResponse(BaseModel):
     exports: list[ExportClipResponse] = Field(default_factory=list)
 
 
+class CaptionWord(BaseModel):
+    word: str
+    start: float = Field(ge=0.0)
+    end: float = Field(gt=0.0)
+
+
+class CaptionSegment(BaseModel):
+    id: str
+    text: str
+    start: float = Field(ge=0.0)
+    end: float = Field(gt=0.0)
+    words: list[CaptionWord] = Field(default_factory=list)
+    sequence: int = Field(ge=0)
+    created_at: str = Field(default_factory=utc_now_iso)
+    updated_at: str = Field(default_factory=utc_now_iso)
+
+
+class ClipCaptionsDocument(BaseModel):
+    project_id: str
+    clip_id: str
+    source_start_time: float = Field(ge=0.0)
+    source_end_time: float = Field(gt=0.0)
+    duration: float = Field(gt=0.0)
+    candidate_id: str | None = None
+    segments: list[CaptionSegment] = Field(default_factory=list)
+    created_at: str = Field(default_factory=utc_now_iso)
+    updated_at: str = Field(default_factory=utc_now_iso)
+
+
+class ClipCaptionsResponse(BaseModel):
+    project_id: str
+    clip_id: str
+    source_start_time: float
+    source_end_time: float
+    duration: float
+    candidate_id: str | None = None
+    segments: list[CaptionSegment] = Field(default_factory=list)
+    created_at: str
+    updated_at: str
+
+
+class UpdateCaptionSegmentRequest(BaseModel):
+    id: str
+    text: str
+    start: float = Field(ge=0.0)
+    end: float = Field(gt=0.0)
+    words: list[CaptionWord] = Field(default_factory=list)
+    sequence: int = Field(ge=0)
+
+
+class UpdateCaptionsRequest(BaseModel):
+    segments: list[UpdateCaptionSegmentRequest]
+
+
+class DeleteCaptionsResponse(BaseModel):
+    project_id: str
+    clip_id: str
+    message: str
+
+
 def project_to_response(project: ProjectMetadata) -> ProjectResponse:
     return ProjectResponse(
         project_id=project.project_id,

@@ -21,6 +21,7 @@ import {
   Scissors,
   Search,
   Star,
+  Subtitles,
   Trash2,
   Video,
   X,
@@ -41,6 +42,7 @@ type ExportedClipsPanelProps = {
   onDelete?: (clipId: string) => Promise<void>;
   onFavorite?: (clipId: string, isFavorite: boolean) => Promise<void>;
   onEdit?: (clip: ExportClipResponse) => void;
+  onCaptions?: (clip: ExportClipResponse) => void;
 };
 
 const SORT_OPTIONS: { value: ExportedClipSort; label: string }[] = [
@@ -91,6 +93,7 @@ type ExportedClipCardProps = {
   onDelete?: (clipId: string) => Promise<void>;
   onFavorite?: (clipId: string, isFavorite: boolean) => Promise<void>;
   onEdit?: (clip: ExportClipResponse) => void;
+  onCaptions?: (clip: ExportClipResponse) => void;
 };
 
 function ExportedClipCard({
@@ -100,6 +103,7 @@ function ExportedClipCard({
   onDelete,
   onFavorite,
   onEdit,
+  onCaptions,
 }: ExportedClipCardProps) {
   const mediaUrl = resolveMediaUrl(clip.media_url);
   const displayName = getClipDisplayName(clip);
@@ -363,6 +367,20 @@ function ExportedClipCard({
               Edit
             </button>
           ) : null}
+          {onCaptions ? (
+            <button
+              type="button"
+              onClick={() => onCaptions(clip)}
+              disabled={isBusy || isEditing}
+              className={cn(
+                "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/5 px-3 text-xs font-medium text-sky-100 transition-colors hover:bg-sky-500/10",
+                (isBusy || isEditing) && "cursor-not-allowed opacity-60",
+              )}
+            >
+              <Subtitles className="h-3.5 w-3.5" />
+              Captions
+            </button>
+          ) : null}
           {onRename ? (
             <button
               type="button"
@@ -445,6 +463,7 @@ export function ExportedClipsPanel({
   onDelete,
   onFavorite,
   onEdit,
+  onCaptions,
 }: ExportedClipsPanelProps) {
   const [clipActions, setClipActions] = useState<Record<string, ClipActionState>>({});
   const [searchQuery, setSearchQuery] = useState("");
@@ -639,6 +658,7 @@ export function ExportedClipsPanel({
               onDelete={onDelete ? handleDelete : undefined}
               onFavorite={onFavorite ? handleFavorite : undefined}
               onEdit={onEdit}
+              onCaptions={onCaptions}
             />
           ))}
         </div>

@@ -3,24 +3,29 @@
 import {
   analyzeProject,
   deleteProjectClip,
+  deleteProjectClipCaptions,
   exportProjectClip,
   favoriteProjectClip,
   extractProjectAudio,
   fetchProject,
   fetchProjectAnalysis,
   fetchProjectClipCandidates,
+  fetchProjectClipCaptions,
   fetchProjectClipExports,
   fetchProjectTranscript,
+  generateProjectClipCaptions,
   getProjectVideoUrl,
   inspectProject,
   renameProjectClip,
   selectProjectClips,
   trimProjectClip,
   transcribeProject,
+  updateProjectClipCaptions,
   type AnalysisDocument,
   type ApiError,
   type ClipCandidate,
   type ClipCandidatesDocument,
+  type ClipCaptionsResponse,
   type ExportClipRequest,
   type ExportClipResponse,
   type Project,
@@ -39,6 +44,10 @@ import {
   ExportedClipsSummary,
 } from "@/components/projects/ExportedClipsPanel";
 import { ClipEditor } from "@/components/projects/ClipEditor";
+import {
+  buildCaptionUpdatePayload,
+  CaptionEditor,
+} from "@/components/projects/CaptionEditor";
 import {
   TimelineAnalysisPanel,
   TimelineAnalysisState,
@@ -138,6 +147,13 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
   const [editingClip, setEditingClip] = useState<ExportClipResponse | null>(null);
   const [trimSaving, setTrimSaving] = useState(false);
   const [trimError, setTrimError] = useState<string | null>(null);
+  const [captionClip, setCaptionClip] = useState<ExportClipResponse | null>(null);
+  const [clipCaptions, setClipCaptions] = useState<ClipCaptionsResponse | null>(null);
+  const [captionsLoading, setCaptionsLoading] = useState(false);
+  const [captionsGenerating, setCaptionsGenerating] = useState(false);
+  const [captionsSaving, setCaptionsSaving] = useState(false);
+  const [captionsResetting, setCaptionsResetting] = useState(false);
+  const [captionsError, setCaptionsError] = useState<string | null>(null);
   const [exportStates, setExportStates] = useState<Record<string, CandidateExportState>>({});
   const [exportedCandidateIds, setExportedCandidateIds] = useState<Set<string>>(
     () => new Set(),
@@ -458,6 +474,128 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
     setEditingClip(null);
     setTrimError(null);
   }, [trimSaving]);
+
+  const loadClipCaptions = useCallback(
+    async (clipId: string) => {
+      setCaptionsLoading(true);
+      setCaptionsError(null);
+
+      try {
+        const captions = await fetchProjectClipCaptions(projectId, clipId);
+        setClipCaptions(captions);
+      } catch (error) {
+        const status =
+          error && typeof error === "object" && "status" in error
+            ? Number((error as ApiError).status)
+            : undefined;
+        if (status === 404) {
+          setClipCaptions(null);
+        } else {
+          const message =
+            error && typeof error === "object" && "message" in error
+              ? String((error as ApiError).message)
+              : "Unable to load captions.";
+          setCaptionsError(message);
+          setClipCaptions(null);
+        }
+      } finally {
+        setCaptionsLoading(false);
+      }
+    },
+    [projectId],
+  );
+
+  const handleOpenCaptionsEditor = useCallback(
+    (clip: ExportClipResponse) => {
+      setCaptionClip(clip);
+      setCaptionsError(null);
+      void loadClipCaptions(clip.clip_id);
+    },
+    [loadClipCaptions],
+  );
+
+  const handleCloseCaptionsEditor = useCallback(() => {
+    if (captionsGenerating || captionsSaving || captionsResetting) {
+      return;
+    }
+    setCaptionClip(null);
+    setClipCaptions(null);
+    setCaptionsError(null);
+  }, [captionsGenerating, captionsResetting, captionsSaving]);
+
+  const handleGenerateCaptions = useCallback(async () => {
+    if (!captionClip) {
+      return;
+    }
+
+    setCaptionsGenerating(true);
+    setCaptionsError(null);
+
+    try {
+      const captions = await generateProjectClipCaptions(projectId, captionClip.clip_id);
+      setClipCaptions(captions);
+    } catch (error) {
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? String((error as ApiError).message)
+          : "Unable to generate captions.";
+      setCaptionsError(message);
+    } finally {
+      setCaptionsGenerating(false);
+    }
+  }, [captionClip, projectId]);
+
+  const handleSaveCaptions = useCallback(
+    async (segments: ClipCaptionsResponse["segments"]) => {
+      if (!captionClip) {
+        return;
+      }
+
+      setCaptionsSaving(true);
+      setCaptionsError(null);
+
+      try {
+        const updated = await updateProjectClipCaptions(
+          projectId,
+          captionClip.clip_id,
+          { segments: buildCaptionUpdatePayload(segments) },
+        );
+        setClipCaptions(updated);
+      } catch (error) {
+        const message =
+          error && typeof error === "object" && "message" in error
+            ? String((error as ApiError).message)
+            : "Unable to save captions.";
+        setCaptionsError(message);
+        throw error;
+      } finally {
+        setCaptionsSaving(false);
+      }
+    },
+    [captionClip, projectId],
+  );
+
+  const handleResetCaptions = useCallback(async () => {
+    if (!captionClip) {
+      return;
+    }
+
+    setCaptionsResetting(true);
+    setCaptionsError(null);
+
+    try {
+      await deleteProjectClipCaptions(projectId, captionClip.clip_id);
+      setClipCaptions(null);
+    } catch (error) {
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? String((error as ApiError).message)
+          : "Unable to reset captions.";
+      setCaptionsError(message);
+    } finally {
+      setCaptionsResetting(false);
+    }
+  }, [captionClip, projectId]);
 
   const handleSaveTrimmedClip = useCallback(
     async ({
@@ -1168,9 +1306,27 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
             onDelete={handleDeleteExportedClip}
             onFavorite={handleFavoriteExportedClip}
             onEdit={handleEditExportedClip}
+            onCaptions={handleOpenCaptionsEditor}
           />
         </CardContent>
       </Card>
+
+      {captionClip ? (
+        <CaptionEditor
+          key={`${captionClip.clip_id}-${clipCaptions?.updated_at ?? "empty"}-${captionsLoading ? "loading" : "ready"}`}
+          clip={captionClip}
+          captions={clipCaptions}
+          loading={captionsLoading}
+          generating={captionsGenerating}
+          saving={captionsSaving}
+          resetting={captionsResetting}
+          error={captionsError}
+          onGenerate={handleGenerateCaptions}
+          onSave={handleSaveCaptions}
+          onReset={handleResetCaptions}
+          onClose={handleCloseCaptionsEditor}
+        />
+      ) : null}
 
       {editingClip ? (
         <ClipEditor

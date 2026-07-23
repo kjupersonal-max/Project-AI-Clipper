@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     clip_selection_min_score: float = 35.0
     clip_export_max_duration_seconds: float = 120.0
     clip_export_subdir: str = "clips"
+    clip_captions_subdir: str = "captions"
     clip_exports_manifest_filename: str = "exports.json"
     clip_export_timeout_seconds: int = 600
 

@@ -244,6 +244,54 @@ export type DeleteClipResponse = {
   message: string;
 };
 
+export type CaptionWord = {
+  word: string;
+  start: number;
+  end: number;
+};
+
+export type CaptionSegment = {
+  id: string;
+  text: string;
+  start: number;
+  end: number;
+  words: CaptionWord[];
+  sequence: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ClipCaptionsResponse = {
+  project_id: string;
+  clip_id: string;
+  source_start_time: number;
+  source_end_time: number;
+  duration: number;
+  candidate_id: string | null;
+  segments: CaptionSegment[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type UpdateCaptionSegmentRequest = {
+  id: string;
+  text: string;
+  start: number;
+  end: number;
+  words?: CaptionWord[];
+  sequence: number;
+};
+
+export type UpdateCaptionsRequest = {
+  segments: UpdateCaptionSegmentRequest[];
+};
+
+export type DeleteCaptionsResponse = {
+  project_id: string;
+  clip_id: string;
+  message: string;
+};
+
 export type ApiError = {
   message: string;
   status?: number;
@@ -521,4 +569,81 @@ export async function deleteProjectClip(
   }
 
   return response.json() as Promise<DeleteClipResponse>;
+}
+
+export async function generateProjectClipCaptions(
+  projectId: string,
+  clipId: string,
+): Promise<ClipCaptionsResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/captions/generate`,
+    {
+      method: "POST",
+    },
+  );
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<ClipCaptionsResponse>;
+}
+
+export async function fetchProjectClipCaptions(
+  projectId: string,
+  clipId: string,
+): Promise<ClipCaptionsResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/captions`,
+    {
+      cache: "no-store",
+    },
+  );
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<ClipCaptionsResponse>;
+}
+
+export async function updateProjectClipCaptions(
+  projectId: string,
+  clipId: string,
+  request: UpdateCaptionsRequest,
+): Promise<ClipCaptionsResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/captions`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    },
+  );
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<ClipCaptionsResponse>;
+}
+
+export async function deleteProjectClipCaptions(
+  projectId: string,
+  clipId: string,
+): Promise<DeleteCaptionsResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/captions`,
+    {
+      method: "DELETE",
+    },
+  );
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<DeleteCaptionsResponse>;
 }
