@@ -333,6 +333,77 @@ class ClipExportsListResponse(BaseModel):
     exports: list[ExportClipResponse] = Field(default_factory=list)
 
 
+class CaptionStylePresetId(str, Enum):
+    CLEAN_MINIMAL = "clean-minimal"
+    BOLD_POP = "bold-pop"
+    PODCAST = "podcast"
+    KARAOKE_HIGHLIGHT = "karaoke-highlight"
+    HIGH_CONTRAST = "high-contrast"
+    CREATOR_SUBTITLE = "creator-subtitle"
+    CUSTOM = "custom"
+
+
+class CaptionTextAlignment(str, Enum):
+    LEFT = "left"
+    CENTER = "center"
+    RIGHT = "right"
+
+
+class CaptionTextTransform(str, Enum):
+    NONE = "none"
+    UPPERCASE = "uppercase"
+    LOWERCASE = "lowercase"
+
+
+class CaptionAnimationType(str, Enum):
+    NONE = "none"
+    FADE = "fade"
+    POP = "pop"
+    SCALE = "scale"
+    SLIDE_UP = "slide-up"
+    BOUNCE = "bounce"
+    ACTIVE_WORD_EMPHASIS = "active-word-emphasis"
+
+
+class CaptionWordsPerGroup(str, Enum):
+    ONE = "1"
+    TWO = "2"
+    THREE = "3"
+    FOUR = "4"
+    FULL = "full"
+
+
+class CaptionSafeAreaMode(str, Enum):
+    NONE = "none"
+    TIKTOK = "tiktok"
+    YOUTUBE_SHORTS = "youtube-shorts"
+    GENERIC = "generic"
+
+
+class CaptionStyle(BaseModel):
+    preset_id: CaptionStylePresetId = CaptionStylePresetId.CLEAN_MINIMAL
+    font_family: str = "Inter, system-ui, sans-serif"
+    font_size: float = Field(default=22.0, ge=12.0, le=72.0)
+    font_weight: int = Field(default=600, ge=100, le=900)
+    text_color: str = "#FFFFFF"
+    active_word_color: str = "#FFFFFF"
+    outline_color: str = "#000000"
+    outline_width: float = Field(default=1.0, ge=0.0, le=8.0)
+    background_color: str = "#000000"
+    background_opacity: float = Field(default=0.45, ge=0.0, le=1.0)
+    shadow_enabled: bool = False
+    shadow_strength: float = Field(default=0.0, ge=0.0, le=1.0)
+    text_alignment: CaptionTextAlignment = CaptionTextAlignment.CENTER
+    horizontal_position: float = Field(default=50.0, ge=0.0, le=100.0)
+    vertical_position: float = Field(default=88.0, ge=0.0, le=100.0)
+    max_line_width: float = Field(default=85.0, ge=50.0, le=100.0)
+    words_per_group: CaptionWordsPerGroup = CaptionWordsPerGroup.FULL
+    text_transform: CaptionTextTransform = CaptionTextTransform.NONE
+    animation_type: CaptionAnimationType = CaptionAnimationType.FADE
+    animation_intensity: float = Field(default=0.4, ge=0.0, le=1.0)
+    safe_area_mode: CaptionSafeAreaMode = CaptionSafeAreaMode.NONE
+
+
 class CaptionWord(BaseModel):
     word: str
     start: float = Field(ge=0.0)
@@ -358,6 +429,7 @@ class ClipCaptionsDocument(BaseModel):
     duration: float = Field(gt=0.0)
     candidate_id: str | None = None
     segments: list[CaptionSegment] = Field(default_factory=list)
+    style: CaptionStyle | None = None
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
 
@@ -370,6 +442,7 @@ class ClipCaptionsResponse(BaseModel):
     duration: float
     candidate_id: str | None = None
     segments: list[CaptionSegment] = Field(default_factory=list)
+    style: CaptionStyle
     created_at: str
     updated_at: str
 
@@ -385,6 +458,10 @@ class UpdateCaptionSegmentRequest(BaseModel):
 
 class UpdateCaptionsRequest(BaseModel):
     segments: list[UpdateCaptionSegmentRequest]
+
+
+class UpdateCaptionStyleRequest(BaseModel):
+    style: CaptionStyle
 
 
 class DeleteCaptionsResponse(BaseModel):

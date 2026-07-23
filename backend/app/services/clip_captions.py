@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.models.project import (
     CaptionSegment,
+    CaptionStyle,
     CaptionWord,
     ClipCaptionsDocument,
     ClipCaptionsResponse,
@@ -168,6 +169,16 @@ def _validate_caption_segments(segments: list[CaptionSegment], clip_duration: fl
                 )
 
 
+def _default_caption_style() -> CaptionStyle:
+    return CaptionStyle()
+
+
+def _resolve_caption_style(document: ClipCaptionsDocument) -> CaptionStyle:
+    if document.style is None:
+        return _default_caption_style()
+    return document.style
+
+
 def _document_to_response(document: ClipCaptionsDocument) -> ClipCaptionsResponse:
     return ClipCaptionsResponse(
         project_id=document.project_id,
@@ -177,6 +188,7 @@ def _document_to_response(document: ClipCaptionsDocument) -> ClipCaptionsRespons
         duration=document.duration,
         candidate_id=document.candidate_id,
         segments=document.segments,
+        style=_resolve_caption_style(document),
         created_at=document.created_at,
         updated_at=document.updated_at,
     )
@@ -252,6 +264,7 @@ def generate_clip_captions(project_id: str, clip_id: str) -> ClipCaptionsRespons
         duration=record.duration,
         candidate_id=record.candidate_id,
         segments=segments,
+        style=_default_caption_style(),
         created_at=now,
         updated_at=now,
     )
@@ -322,3 +335,37 @@ def reset_clip_captions(project_id: str, clip_id: str) -> DeleteCaptionsResponse
         clip_id=clip_id,
         message="Captions deleted successfully.",
     )
+
+
+def update_clip_caption_style(
+    project_id: str,
+    clip_id: str,
+    style: CaptionStyle,
+) -> ClipCaptionsResponse:
+    load_project(project_id)
+    locate_exported_clip(project_id, clip_id)
+    existing = _load_captions_document(project_id, clip_id)
+
+    document = existing.model_copy(
+        update={
+            "style": style,
+            "updated_at": utc_now_iso(),
+        }
+    )
+    _write_captions_document(document)
+    return _document_to_response(document)
+
+
+def reset_clip_caption_style(project_id: str, clip_id: str) -> ClipCaptionsResponse:
+    load_project(project_id)
+    locate_exported_clip(project_id, clip_id)
+    existing = _load_captions_document(project_id, clip_id)
+
+    document = existing.model_copy(
+        update={
+            "style": _default_caption_style(),
+            "updated_at": utc_now_iso(),
+        }
+    )
+    _write_captions_document(document)
+    return _document_to_response(document)

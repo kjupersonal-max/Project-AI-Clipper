@@ -17,9 +17,11 @@ import {
   getProjectVideoUrl,
   inspectProject,
   renameProjectClip,
+  resetProjectClipCaptionStyle,
   selectProjectClips,
   trimProjectClip,
   transcribeProject,
+  updateProjectClipCaptionStyle,
   updateProjectClipCaptions,
   type AnalysisDocument,
   type ApiError,
@@ -152,6 +154,8 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
   const [captionsLoading, setCaptionsLoading] = useState(false);
   const [captionsGenerating, setCaptionsGenerating] = useState(false);
   const [captionsSaving, setCaptionsSaving] = useState(false);
+  const [captionStyleSaving, setCaptionStyleSaving] = useState(false);
+  const [captionStyleResetting, setCaptionStyleResetting] = useState(false);
   const [captionsResetting, setCaptionsResetting] = useState(false);
   const [captionsError, setCaptionsError] = useState<string | null>(null);
   const [exportStates, setExportStates] = useState<Record<string, CandidateExportState>>({});
@@ -515,13 +519,25 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
   );
 
   const handleCloseCaptionsEditor = useCallback(() => {
-    if (captionsGenerating || captionsSaving || captionsResetting) {
+    if (
+      captionsGenerating ||
+      captionsSaving ||
+      captionStyleSaving ||
+      captionStyleResetting ||
+      captionsResetting
+    ) {
       return;
     }
     setCaptionClip(null);
     setClipCaptions(null);
     setCaptionsError(null);
-  }, [captionsGenerating, captionsResetting, captionsSaving]);
+  }, [
+    captionStyleResetting,
+    captionStyleSaving,
+    captionsGenerating,
+    captionsResetting,
+    captionsSaving,
+  ]);
 
   const handleGenerateCaptions = useCallback(async () => {
     if (!captionClip) {
@@ -574,6 +590,58 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
     },
     [captionClip, projectId],
   );
+
+  const handleSaveCaptionStyle = useCallback(
+    async (style: ClipCaptionsResponse["style"]) => {
+      if (!captionClip) {
+        return;
+      }
+
+      setCaptionStyleSaving(true);
+      setCaptionsError(null);
+
+      try {
+        const updated = await updateProjectClipCaptionStyle(
+          projectId,
+          captionClip.clip_id,
+          { style },
+        );
+        setClipCaptions(updated);
+      } catch (error) {
+        const message =
+          error && typeof error === "object" && "message" in error
+            ? String((error as ApiError).message)
+            : "Unable to save caption style.";
+        setCaptionsError(message);
+        throw error;
+      } finally {
+        setCaptionStyleSaving(false);
+      }
+    },
+    [captionClip, projectId],
+  );
+
+  const handleResetCaptionStyle = useCallback(async () => {
+    if (!captionClip) {
+      return;
+    }
+
+    setCaptionStyleResetting(true);
+    setCaptionsError(null);
+
+    try {
+      const updated = await resetProjectClipCaptionStyle(projectId, captionClip.clip_id);
+      setClipCaptions(updated);
+    } catch (error) {
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? String((error as ApiError).message)
+          : "Unable to reset caption style.";
+      setCaptionsError(message);
+    } finally {
+      setCaptionStyleResetting(false);
+    }
+  }, [captionClip, projectId]);
 
   const handleResetCaptions = useCallback(async () => {
     if (!captionClip) {
@@ -1319,10 +1387,14 @@ export function ProjectDetails({ projectId }: ProjectDetailsProps) {
           loading={captionsLoading}
           generating={captionsGenerating}
           saving={captionsSaving}
+          styleSaving={captionStyleSaving}
+          styleResetting={captionStyleResetting}
           resetting={captionsResetting}
           error={captionsError}
           onGenerate={handleGenerateCaptions}
           onSave={handleSaveCaptions}
+          onSaveStyle={handleSaveCaptionStyle}
+          onResetStyle={handleResetCaptionStyle}
           onReset={handleResetCaptions}
           onClose={handleCloseCaptionsEditor}
         />

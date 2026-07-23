@@ -23,6 +23,7 @@ from app.models.project import (
     TranscribeResponse,
     TranscriptDocument,
     UpdateCaptionsRequest,
+    UpdateCaptionStyleRequest,
     project_to_response,
     utc_now_iso,
 )
@@ -54,7 +55,9 @@ from app.services.clip_captions import (
     generate_clip_captions,
     get_clip_captions,
     reset_clip_captions,
+    reset_clip_caption_style,
     update_clip_captions,
+    update_clip_caption_style,
 )
 from app.services.clip_export import (
     ClipExportNotFoundError,
@@ -407,6 +410,47 @@ def delete_project_clip_captions(project_id: str, clip_id: str) -> DeleteCaption
         raise HTTPException(status_code=404, detail=exc.message) from exc
     except ClipCaptionsNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message) from exc
+
+
+@router.put(
+    "/{project_id}/clips/{clip_id}/captions/style",
+    response_model=ClipCaptionsResponse,
+)
+def update_project_clip_caption_style(
+    project_id: str,
+    clip_id: str,
+    request: UpdateCaptionStyleRequest,
+) -> ClipCaptionsResponse:
+    validate_project_id(project_id)
+
+    try:
+        return update_clip_caption_style(project_id, clip_id, request.style)
+    except ClipExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+
+
+@router.post(
+    "/{project_id}/clips/{clip_id}/captions/style/reset",
+    response_model=ClipCaptionsResponse,
+)
+def reset_project_clip_caption_style(
+    project_id: str,
+    clip_id: str,
+) -> ClipCaptionsResponse:
+    validate_project_id(project_id)
+
+    try:
+        return reset_clip_caption_style(project_id, clip_id)
+    except ClipExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ClipCaptionsValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
 
 
 @router.post("/{project_id}/inspect", response_model=InspectResponse)

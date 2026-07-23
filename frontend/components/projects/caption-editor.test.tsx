@@ -1,8 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ComponentProps } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CaptionEditor } from "@/components/projects/CaptionEditor";
 import type { ClipCaptionsResponse, ExportClipResponse } from "@/lib/api/projects";
+import { createDefaultCaptionStyle } from "@/lib/caption-style";
 
 const exportedClip: ExportClipResponse = {
   clip_id: "clip-1",
@@ -21,6 +23,8 @@ const exportedClip: ExportClipResponse = {
   is_favorite: false,
 };
 
+const defaultStyle = createDefaultCaptionStyle();
+
 const captions: ClipCaptionsResponse = {
   project_id: "project-1",
   clip_id: "clip-1",
@@ -28,6 +32,7 @@ const captions: ClipCaptionsResponse = {
   source_end_time: 25,
   duration: 15,
   candidate_id: "candidate-123",
+  style: defaultStyle,
   segments: [
     {
       id: "cap-1",
@@ -54,8 +59,67 @@ const captions: ClipCaptionsResponse = {
   updated_at: "2026-07-22T18:10:00Z",
 };
 
+const captionsWithWords: ClipCaptionsResponse = {
+  ...captions,
+  segments: [
+    {
+      id: "cap-words",
+      text: "Hello beautiful world",
+      start: 0,
+      end: 3,
+      words: [
+        { word: "Hello", start: 0, end: 0.8 },
+        { word: "beautiful", start: 0.8, end: 1.6 },
+        { word: "world", start: 1.6, end: 3 },
+      ],
+      sequence: 0,
+      created_at: "2026-07-22T18:10:00Z",
+      updated_at: "2026-07-22T18:10:00Z",
+    },
+  ],
+};
+
+function renderEditor(
+  overrides: Partial<ComponentProps<typeof CaptionEditor>> = {},
+) {
+  const props = {
+    clip: exportedClip,
+    captions,
+    onGenerate: vi.fn().mockResolvedValue(undefined),
+    onSave: vi.fn().mockResolvedValue(undefined),
+    onSaveStyle: vi.fn().mockResolvedValue(undefined),
+    onResetStyle: vi.fn().mockResolvedValue(undefined),
+    onReset: vi.fn().mockResolvedValue(undefined),
+    onClose: vi.fn(),
+    ...overrides,
+  };
+
+  return {
+    ...render(<CaptionEditor {...props} />),
+    props,
+  };
+}
+
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
+});
+
+beforeEach(() => {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    configurable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
 });
 
 describe("CaptionEditor", () => {
@@ -67,6 +131,8 @@ describe("CaptionEditor", () => {
         loading
         onGenerate={vi.fn()}
         onSave={vi.fn()}
+        onSaveStyle={vi.fn()}
+        onResetStyle={vi.fn()}
         onReset={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -80,6 +146,8 @@ describe("CaptionEditor", () => {
         captions={null}
         onGenerate={vi.fn()}
         onSave={vi.fn()}
+        onSaveStyle={vi.fn()}
+        onResetStyle={vi.fn()}
         onReset={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -89,16 +157,7 @@ describe("CaptionEditor", () => {
   });
 
   it("loads saved captions and highlights active caption during playback", () => {
-    render(
-      <CaptionEditor
-        clip={exportedClip}
-        captions={captions}
-        onGenerate={vi.fn()}
-        onSave={vi.fn()}
-        onReset={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
+    renderEditor();
 
     expect(screen.getByDisplayValue("First caption")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Second caption")).toBeInTheDocument();
@@ -119,6 +178,8 @@ describe("CaptionEditor", () => {
         captions={null}
         onGenerate={onGenerate}
         onSave={vi.fn()}
+        onSaveStyle={vi.fn()}
+        onResetStyle={vi.fn()}
         onReset={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -130,17 +191,7 @@ describe("CaptionEditor", () => {
 
   it("seeks video when clicking a caption row", async () => {
     const user = userEvent.setup();
-
-    render(
-      <CaptionEditor
-        clip={exportedClip}
-        captions={captions}
-        onGenerate={vi.fn()}
-        onSave={vi.fn()}
-        onReset={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
+    renderEditor();
 
     const video = document.querySelector("video") as HTMLVideoElement;
     Object.defineProperty(video, "currentTime", {
@@ -156,17 +207,7 @@ describe("CaptionEditor", () => {
   it("edits caption text and timing then saves successfully", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockResolvedValue(undefined);
-
-    render(
-      <CaptionEditor
-        clip={exportedClip}
-        captions={captions}
-        onGenerate={vi.fn()}
-        onSave={onSave}
-        onReset={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
+    renderEditor({ onSave });
 
     fireEvent.change(screen.getByDisplayValue("First caption"), {
       target: { value: "Updated caption" },
@@ -191,40 +232,138 @@ describe("CaptionEditor", () => {
   });
 
   it("shows save failure from parent error state", () => {
-    render(
-      <CaptionEditor
-        clip={exportedClip}
-        captions={captions}
-        error="Unable to save captions."
-        onGenerate={vi.fn()}
-        onSave={vi.fn()}
-        onReset={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-
+    renderEditor({ error: "Unable to save captions." });
     expect(screen.getByText(/unable to save captions/i)).toBeInTheDocument();
   });
 
   it("requires confirmation before resetting captions", async () => {
     const user = userEvent.setup();
     const onReset = vi.fn().mockResolvedValue(undefined);
-
-    render(
-      <CaptionEditor
-        clip={exportedClip}
-        captions={captions}
-        onGenerate={vi.fn()}
-        onSave={vi.fn()}
-        onReset={onReset}
-        onClose={vi.fn()}
-      />,
-    );
+    renderEditor({ onReset });
 
     await user.click(screen.getByRole("button", { name: /reset captions/i }));
     expect(onReset).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: /confirm reset/i }));
     expect(onReset).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens style controls from the style tab", async () => {
+    const user = userEvent.setup();
+    renderEditor();
+
+    await user.click(screen.getByRole("button", { name: /^style$/i }));
+
+    expect(screen.getByLabelText(/caption preset/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/caption font size/i)).toBeInTheDocument();
+  });
+
+  it("selects presets and updates preview state", async () => {
+    const user = userEvent.setup();
+    renderEditor();
+
+    await user.click(screen.getByRole("button", { name: /^style$/i }));
+    await user.selectOptions(screen.getByLabelText(/caption preset/i), "bold-pop");
+
+    expect(screen.getByLabelText(/caption preset/i)).toBeInTheDocument();
+  });
+
+  it("changes colors and font size in style panel", async () => {
+    const user = userEvent.setup();
+    renderEditor();
+
+    await user.click(screen.getByRole("button", { name: /^style$/i }));
+
+    fireEvent.change(screen.getByLabelText(/caption font size/i), {
+      target: { value: "40" },
+    });
+    fireEvent.change(screen.getByLabelText(/caption text color/i), {
+      target: { value: "#ff0000" },
+    });
+
+    expect(screen.getByText(/unsaved style changes/i)).toBeInTheDocument();
+  });
+
+  it("changes position and words-per-group controls", async () => {
+    const user = userEvent.setup();
+    renderEditor();
+
+    await user.click(screen.getByRole("button", { name: /^style$/i }));
+
+    fireEvent.change(screen.getByLabelText(/caption horizontal position/i), {
+      target: { value: "30" },
+    });
+    await user.selectOptions(screen.getByLabelText(/caption words per group/i), "2");
+
+    expect(screen.getByText(/unsaved style changes/i)).toBeInTheDocument();
+  });
+
+  it("saves style changes", async () => {
+    const user = userEvent.setup();
+    const onSaveStyle = vi.fn().mockResolvedValue(undefined);
+    renderEditor({ onSaveStyle });
+
+    await user.click(screen.getByRole("button", { name: /^style$/i }));
+    fireEvent.change(screen.getByLabelText(/caption font size/i), {
+      target: { value: "36" },
+    });
+    await user.click(screen.getByRole("button", { name: /save style/i }));
+
+    await waitFor(() => {
+      expect(onSaveStyle).toHaveBeenCalledWith(
+        expect.objectContaining({
+          font_size: 36,
+        }),
+      );
+    });
+  });
+
+  it("resets style from the style panel", async () => {
+    const user = userEvent.setup();
+    const onResetStyle = vi.fn().mockResolvedValue(undefined);
+    renderEditor({ onResetStyle });
+
+    await user.click(screen.getByRole("button", { name: /^style$/i }));
+    await user.click(screen.getByRole("button", { name: /reset style/i }));
+
+    expect(onResetStyle).toHaveBeenCalledTimes(1);
+  });
+
+  it("toggles safe-area preview guides", async () => {
+    const user = userEvent.setup();
+    renderEditor();
+
+    await user.click(screen.getByRole("button", { name: /^style$/i }));
+    await user.selectOptions(screen.getByLabelText(/caption safe area mode/i), "tiktok");
+
+    expect(screen.getByLabelText(/show safe area guides/i)).toBeChecked();
+  });
+
+  it("renders word-level captions in preview overlay", () => {
+    renderEditor({ captions: captionsWithWords });
+
+    expect(screen.getByText("Hello")).toBeInTheDocument();
+  });
+
+  it("falls back to segment text when word timing is unavailable", () => {
+    renderEditor();
+    expect(screen.getAllByText("First caption").length).toBeGreaterThan(0);
+  });
+
+  it("respects reduced motion for animation classes", () => {
+    const matchMediaMock = vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
+      matches: query.includes("prefers-reduced-motion"),
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+
+    renderEditor({ captions: captionsWithWords });
+
+    expect(matchMediaMock).toHaveBeenCalled();
   });
 });

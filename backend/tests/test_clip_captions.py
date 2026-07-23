@@ -25,7 +25,9 @@ from app.services.clip_captions import (
     generate_clip_captions,
     get_clip_captions,
     reset_clip_captions,
+    reset_clip_caption_style,
     update_clip_captions,
+    update_clip_caption_style,
 )
 from app.services.clip_export import ClipExportNotFoundError, export_project_clip
 from app.services.project_store import (
@@ -34,7 +36,12 @@ from app.services.project_store import (
     load_project,
     save_project,
 )
-from app.models.project import UpdateCaptionSegmentRequest
+from app.models.project import (
+    CaptionStyle,
+    CaptionStylePresetId,
+    CaptionAnimationType,
+    UpdateCaptionSegmentRequest,
+)
 
 
 def _completed_process(args: list[str], stdout: str = "", stderr: str = "", code: int = 0):
@@ -405,3 +412,193 @@ def test_delete_captions_endpoint(sample_project, temp_backend_dirs):
         f"/api/projects/{sample_project['project_id']}/clips/{exported.clip_id}/captions"
     )
     assert get_response.status_code == 404
+
+
+def test_default_caption_style_on_generation(sample_project, temp_backend_dirs):
+    _write_transcript(sample_project["project_id"], _sample_transcript(sample_project["project_id"]))
+    exported = _export_sample_clip(sample_project)
+
+    response = generate_clip_captions(sample_project["project_id"], exported.clip_id)
+
+    assert response.style.preset_id == CaptionStylePresetId.CLEAN_MINIMAL
+    assert response.style.font_size == pytest.approx(22.0)
+    assert response.style.animation_type == CaptionAnimationType.FADE
+
+
+def test_save_caption_style(sample_project, temp_backend_dirs):
+    _write_transcript(sample_project["project_id"], _sample_transcript(sample_project["project_id"]))
+    exported = _export_sample_clip(sample_project)
+    generate_clip_captions(sample_project["project_id"], exported.clip_id)
+
+    custom_style = CaptionStyle(
+        preset_id=CaptionStylePresetId.BOLD_POP,
+        font_size=30.0,
+        text_color="#FF0000",
+        animation_type=CaptionAnimationType.POP,
+    )
+    updated = update_clip_caption_style(
+        sample_project["project_id"],
+        exported.clip_id,
+        custom_style,
+    )
+
+    assert updated.style.preset_id == CaptionStylePresetId.BOLD_POP
+    assert updated.style.font_size == pytest.approx(30.0)
+    assert updated.style.text_color == "#FF0000"
+
+
+def test_load_persisted_caption_style(sample_project, temp_backend_dirs):
+    _write_transcript(sample_project["project_id"], _sample_transcript(sample_project["project_id"]))
+    exported = _export_sample_clip(sample_project)
+    generate_clip_captions(sample_project["project_id"], exported.clip_id)
+
+    custom_style = CaptionStyle(
+        preset_id=CaptionStylePresetId.KARAOKE_HIGHLIGHT,
+        words_per_group="3",
+    )
+    update_clip_caption_style(sample_project["project_id"], exported.clip_id, custom_style)
+
+    reloaded = get_clip_captions(sample_project["project_id"], exported.clip_id)
+
+    assert reloaded.style.preset_id == CaptionStylePresetId.KARAOKE_HIGHLIGHT
+    assert reloaded.style.words_per_group.value == "3"
+
+
+def test_invalid_caption_style_values_rejected(sample_project, temp_backend_dirs):
+    _write_transcript(sample_project["project_id"], _sample_transcript(sample_project["project_id"]))
+    exported = _export_sample_clip(sample_project)
+    generate_clip_captions(sample_project["project_id"], exported.clip_id)
+    client = TestClient(app)
+
+    response = client.put(
+        f"/api/projects/{sample_project['project_id']}/clips/{exported.clip_id}/captions/style",
+        json={"style": {"preset_id": "invalid-preset", "font_size": 24}},
+    )
+
+    assert response.status_code == 422
+
+
+def test_backwards_compatible_captions_without_style(sample_project, temp_backend_dirs):
+    _write_transcript(sample_project["project_id"], _sample_transcript(sample_project["project_id"]))
+    exported = _export_sample_clip(sample_project)
+    generated = generate_clip_captions(sample_project["project_id"], exported.clip_id)
+
+    captions_path = get_clip_captions_path(sample_project["project_id"], exported.clip_id)
+    payload = json.loads(captions_path.read_text(encoding="utf-8"))
+    payload.pop("style", None)
+    captions_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    reloaded = get_clip_captions(sample_project["project_id"], exported.clip_id)
+
+    assert reloaded.segments[0].id == generated.segments[0].id
+    assert reloaded.style.preset_id == CaptionStylePresetId.CLEAN_MINIMAL
+
+
+def test_reset_caption_style(sample_project, temp_backend_dirs):
+    _write_transcript(sample_project["project_id"], _sample_transcript(sample_project["project_id"]))
+    exported = _export_sample_clip(sample_project)
+    generate_clip_captions(sample_project["project_id"], exported.clip_id)
+
+    custom_style = CaptionStyle(
+        preset_id=CaptionStylePresetId.HIGH_CONTRAST,
+        font_size=40.0,
+    )
+    update_clip_caption_style(sample_project["project_id"], exported.clip_id, custom_style)
+
+    reset = reset_clip_caption_style(sample_project["project_id"], exported.clip_id)
+
+    assert reset.style.preset_id == CaptionStylePresetId.CLEAN_MINIMAL
+    assert reset.style.font_size == pytest.approx(22.0)
+    assert len(reset.segments) >= 1
+
+
+def test_delete_captions_removes_style(sample_project, temp_backend_dirs):
+    _write_transcript(sample_project["project_id"], _sample_transcript(sample_project["project_id"]))
+    exported = _export_sample_clip(sample_project)
+    generate_clip_captions(sample_project["project_id"], exported.clip_id)
+
+    custom_style = CaptionStyle(preset_id=CaptionStylePresetId.PODCAST)
+    update_clip_caption_style(sample_project["project_id"], exported.clip_id, custom_style)
+
+    reset_clip_captions(sample_project["project_id"], exported.clip_id)
+
+    assert not get_clip_captions_path(sample_project["project_id"], exported.clip_id).exists()
+
+
+def test_trimmed_clip_style_compatibility(sample_project, temp_backend_dirs):
+    transcript = _sample_transcript(sample_project["project_id"])
+    _write_transcript(sample_project["project_id"], transcript)
+    _set_video_metadata(sample_project)
+
+    with patch(
+        "app.services.clip_export._run_command",
+        side_effect=_fake_ffmpeg_run_factory(),
+    ):
+        parent = export_project_clip(
+            sample_project["project_id"],
+            start_time=1.0,
+            end_time=8.0,
+            clip_name="Parent Clip",
+        )
+        from app.services.clip_export import trim_project_clip
+
+        trimmed = trim_project_clip(
+            sample_project["project_id"],
+            parent.clip_id,
+            start_time=3.0,
+            end_time=5.5,
+            clip_name="Trimmed Clip",
+        )
+
+    generated = generate_clip_captions(sample_project["project_id"], trimmed.clip_id)
+    styled = update_clip_caption_style(
+        sample_project["project_id"],
+        trimmed.clip_id,
+        CaptionStyle(preset_id=CaptionStylePresetId.CREATOR_SUBTITLE, words_per_group="2"),
+    )
+
+    assert styled.duration == pytest.approx(2.5)
+    assert styled.style.words_per_group.value == "2"
+    assert len(styled.segments) == 1
+
+
+def test_update_style_endpoint(sample_project, temp_backend_dirs):
+    _write_transcript(sample_project["project_id"], _sample_transcript(sample_project["project_id"]))
+    exported = _export_sample_clip(sample_project)
+    client = TestClient(app)
+
+    client.post(
+        f"/api/projects/{sample_project['project_id']}/clips/{exported.clip_id}/captions/generate"
+    )
+
+    response = client.put(
+        f"/api/projects/{sample_project['project_id']}/clips/{exported.clip_id}/captions/style",
+        json={
+            "style": {
+                "preset_id": "bold-pop",
+                "font_family": "Impact, Haettenschweiler, sans-serif",
+                "font_size": 32,
+                "font_weight": 800,
+                "text_color": "#FFFFFF",
+                "active_word_color": "#FF6B6B",
+                "outline_color": "#000000",
+                "outline_width": 3,
+                "background_color": "#000000",
+                "background_opacity": 0,
+                "shadow_enabled": True,
+                "shadow_strength": 0.7,
+                "text_alignment": "center",
+                "horizontal_position": 50,
+                "vertical_position": 75,
+                "max_line_width": 90,
+                "words_per_group": "2",
+                "text_transform": "uppercase",
+                "animation_type": "pop",
+                "animation_intensity": 0.7,
+                "safe_area_mode": "none",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["style"]["preset_id"] == "bold-pop"

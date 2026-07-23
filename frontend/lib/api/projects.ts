@@ -250,6 +250,16 @@ export type CaptionWord = {
   end: number;
 };
 
+export type {
+  CaptionStyle,
+  CaptionStylePresetId,
+  CaptionAnimationType,
+  CaptionWordsPerGroup,
+  CaptionSafeAreaMode,
+} from "@/lib/caption-style";
+
+import type { CaptionStyle } from "@/lib/caption-style";
+
 export type CaptionSegment = {
   id: string;
   text: string;
@@ -269,6 +279,7 @@ export type ClipCaptionsResponse = {
   duration: number;
   candidate_id: string | null;
   segments: CaptionSegment[];
+  style: CaptionStyle;
   created_at: string;
   updated_at: string;
 };
@@ -284,6 +295,10 @@ export type UpdateCaptionSegmentRequest = {
 
 export type UpdateCaptionsRequest = {
   segments: UpdateCaptionSegmentRequest[];
+};
+
+export type UpdateCaptionStyleRequest = {
+  style: CaptionStyle;
 };
 
 export type DeleteCaptionsResponse = {
@@ -646,4 +661,45 @@ export async function deleteProjectClipCaptions(
   }
 
   return response.json() as Promise<DeleteCaptionsResponse>;
+}
+
+export async function updateProjectClipCaptionStyle(
+  projectId: string,
+  clipId: string,
+  request: UpdateCaptionStyleRequest,
+): Promise<ClipCaptionsResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/captions/style`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    },
+  );
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<ClipCaptionsResponse>;
+}
+
+export async function resetProjectClipCaptionStyle(
+  projectId: string,
+  clipId: string,
+): Promise<ClipCaptionsResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${projectId}/clips/${clipId}/captions/style/reset`,
+    {
+      method: "POST",
+    },
+  );
+
+  if (!response.ok) {
+    throw { message: await parseError(response), status: response.status } satisfies ApiError;
+  }
+
+  return response.json() as Promise<ClipCaptionsResponse>;
 }

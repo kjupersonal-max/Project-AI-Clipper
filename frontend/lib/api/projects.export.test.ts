@@ -8,10 +8,13 @@ import {
   fetchProjectClipExports,
   generateProjectClipCaptions,
   renameProjectClip,
+  resetProjectClipCaptionStyle,
   resolveMediaUrl,
   trimProjectClip,
+  updateProjectClipCaptionStyle,
   updateProjectClipCaptions,
 } from "@/lib/api/projects";
+import { createDefaultCaptionStyle } from "@/lib/caption-style";
 
 describe("exportProjectClip", () => {
   beforeEach(() => {
@@ -472,6 +475,45 @@ describe("clip caption API helpers", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "http://localhost:8000/api/projects/project-1/clips/clip-1/captions",
       expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  it("updates caption style", async () => {
+    const style = createDefaultCaptionStyle();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ project_id: "project-1", clip_id: "clip-1", style, segments: [] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await updateProjectClipCaptionStyle("project-1", "clip-1", { style });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/api/projects/project-1/clips/clip-1/captions/style",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ style }),
+      }),
+    );
+  });
+
+  it("resets caption style", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        project_id: "project-1",
+        clip_id: "clip-1",
+        style: createDefaultCaptionStyle(),
+        segments: [],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await resetProjectClipCaptionStyle("project-1", "clip-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/api/projects/project-1/clips/clip-1/captions/style/reset",
+      expect.objectContaining({ method: "POST" }),
     );
   });
 });

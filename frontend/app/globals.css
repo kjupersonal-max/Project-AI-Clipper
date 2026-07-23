@@ -31,3 +31,110 @@ body {
 input[type="search"]::-webkit-search-cancel-button {
   display: none;
 }
+
+@keyframes caption-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes caption-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes caption-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes caption-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes caption-bounce-in {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.95);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(-4px) scale(1.02);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.caption-anim-fade {
+  animation: caption-fade-in 0.25s ease-out both;
+}
+
+.caption-anim-pop {
+  animation: caption-pop-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.caption-anim-scale {
+  animation: caption-scale-in 0.28s ease-out both;
+}
+
+.caption-anim-slide-up {
+  animation: caption-slide-up 0.3s ease-out both;
+}
+
+.caption-anim-bounce {
+  animation: caption-bounce-in 0.45s ease-out both;
+}
+
+.caption-anim-soft {
+  --caption-anim-scale: 0.92;
+}
+
+.caption-anim-medium {
+  --caption-anim-scale: 0.85;
+}
+
+.caption-anim-strong {
+  --caption-anim-scale: 0.75;
+}
+
+.caption-active-word-emphasis {
+  transition: color 0.1s ease, transform 0.12s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .caption-anim-fade,
+  .caption-anim-pop,
+  .caption-anim-scale,
+  .caption-anim-slide-up,
+  .caption-anim-bounce {
+    animation: none;
+  }
+
+  .caption-active-word-emphasis {
+    transform: none !important;
+  }
+}
