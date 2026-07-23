@@ -62,6 +62,32 @@ describe("TranscriptionRecoveryPanel", () => {
     expect(screen.getByRole("combobox")).toBeInTheDocument();
   });
 
+  it("deduplicates repeated transcription warnings in the ui", () => {
+    render(
+      <TranscriptionRecoveryPanel
+        projectId="project-1"
+        clipId="clip-1"
+        clipDuration={10}
+        captions={{
+          ...captions,
+          transcription_warnings: [
+            "Low-confidence transcription detected (7 words).",
+            "Low-confidence transcription detected (7 words).",
+          ],
+        }}
+        selectedSegmentId="cap-1"
+        playbackTime={1}
+        onCaptionsUpdated={vi.fn()}
+        onSegmentsUpdated={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getAllByText("Low-confidence transcription detected (7 words)."),
+    ).toHaveLength(1);
+  });
+
   it("shows high accuracy warning when selected", async () => {
     const user = userEvent.setup();
     render(

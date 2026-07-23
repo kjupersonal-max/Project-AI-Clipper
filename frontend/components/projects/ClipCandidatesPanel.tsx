@@ -15,7 +15,7 @@ import {
 } from "@/lib/candidate-captions";
 import { Badge } from "@/components/ui/Badge";
 import { ClipExportButton } from "@/components/projects/ClipExportButton";
-import { formatDuration } from "@/lib/utils";
+import { formatDuration, uniqueStringListItems } from "@/lib/utils";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -226,8 +226,8 @@ function ClipCandidateCard({
           <div className="rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2">
             <p className="text-[10px] uppercase tracking-wider text-amber-300/80">Warnings</p>
             <ul className="mt-1 space-y-1 text-xs text-amber-100/90">
-              {candidate.warnings.map((warning) => (
-                <li key={warning}>{warning}</li>
+              {uniqueStringListItems(candidate.warnings, "candidate-warning").map((warning) => (
+                <li key={warning.key}>{warning.text}</li>
               ))}
             </ul>
           </div>
@@ -288,8 +288,8 @@ function ClipCandidateCard({
       <div className="border-t border-amber-500/20 bg-amber-500/5 px-4 py-3">
         <p className="text-xs uppercase tracking-wider text-amber-300/80">Why this clip</p>
         <ul className="mt-1 space-y-1 text-sm text-amber-100/90">
-          {selectionReasons.map((item) => (
-            <li key={item}>• {item}</li>
+          {uniqueStringListItems(selectionReasons, "selection-reason").map((item) => (
+            <li key={item.key}>• {item.text}</li>
           ))}
         </ul>
       </div>

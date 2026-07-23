@@ -31,7 +31,7 @@ import {
   TRANSCRIPTION_QUALITY_MODES,
   validateRetranscribeRange,
 } from "@/lib/transcription";
-import { cn } from "@/lib/utils";
+import { cn, uniqueStringListItems } from "@/lib/utils";
 import { AlertTriangle, Loader2, Plus, RefreshCw, Scissors, Wand2 } from "lucide-react";
 
 type TranscriptionRecoveryPanelProps = {
@@ -349,9 +349,11 @@ export function TranscriptionRecoveryPanel({
 
       {(captions.transcription_warnings ?? []).length > 0 ? (
         <div className="space-y-1 rounded-md border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-100">
-          {captions.transcription_warnings?.map((warning) => (
-            <p key={warning}>{warning}</p>
-          ))}
+          {uniqueStringListItems(captions.transcription_warnings, "caption-warning").map(
+            (warning) => (
+              <p key={warning.key}>{warning.text}</p>
+            ),
+          )}
         </div>
       ) : null}
 
@@ -453,14 +455,14 @@ export function TranscriptionRecoveryPanel({
       {previewOpen ? (
         <div className="space-y-2 rounded-md border border-violet-500/20 bg-violet-500/5 p-3">
           <p className="text-xs font-medium text-violet-100">Preview replacement</p>
-          {previewWarnings.map((warning) => (
-            <p key={warning} className="text-xs text-amber-100">
-              {warning}
+          {uniqueStringListItems(previewWarnings, "preview-warning").map((warning) => (
+            <p key={warning.key} className="text-xs text-amber-100">
+              {warning.text}
             </p>
           ))}
-          {manualEditWarnings.map((warning) => (
-            <p key={warning} className="text-xs text-amber-100">
-              {warning}
+          {uniqueStringListItems(manualEditWarnings, "manual-edit-warning").map((warning) => (
+            <p key={warning.key} className="text-xs text-amber-100">
+              {warning.text}
             </p>
           ))}
           <div className="max-h-32 space-y-1 overflow-y-auto">

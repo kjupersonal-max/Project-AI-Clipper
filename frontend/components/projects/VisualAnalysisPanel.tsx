@@ -3,7 +3,7 @@
 import type { Project, VisualAnalysisDocument } from "@/lib/api/projects";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-import { cn, formatDuration } from "@/lib/utils";
+import { cn, formatDuration, uniqueStringListItems } from "@/lib/utils";
 import { AlertTriangle, Eye, Loader2 } from "lucide-react";
 
 type VisualAnalysisPanelProps = {
@@ -119,8 +119,8 @@ export function VisualAnalysisPanel({
         <div className="rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2">
           <p className="text-[10px] uppercase tracking-wider text-amber-300/80">Warnings</p>
           <ul className="mt-1 space-y-1 text-xs text-amber-100/90">
-            {visualAnalysis.warnings.map((warning) => (
-              <li key={warning}>{warning}</li>
+            {uniqueStringListItems(visualAnalysis.warnings, "visual-warning").map((warning) => (
+              <li key={warning.key}>{warning.text}</li>
             ))}
           </ul>
         </div>

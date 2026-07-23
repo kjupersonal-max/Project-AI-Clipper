@@ -40,3 +40,33 @@ export function formatDuration(seconds: number | null | undefined): string {
   const remaining = total % 60;
   return minutes > 0 ? `${minutes}m ${remaining}s` : `${remaining}s`;
 }
+
+export type UniqueListItem = {
+  key: string;
+  text: string;
+};
+
+export function uniqueStringListItems(
+  items: readonly string[] | null | undefined,
+  keyPrefix = "item",
+): UniqueListItem[] {
+  if (!items?.length) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const result: UniqueListItem[] = [];
+
+  items.forEach((text, index) => {
+    if (seen.has(text)) {
+      return;
+    }
+    seen.add(text);
+    result.push({
+      key: `${keyPrefix}-${index}`,
+      text,
+    });
+  });
+
+  return result;
+}
